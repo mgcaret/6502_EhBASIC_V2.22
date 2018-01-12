@@ -44,9 +44,6 @@ TWidth            = $0F       ; BASIC terminal width byte
 Iclim             = $10       ; input column limit
 Itempl            = $11       ; temporary integer low byte
 Itemph            = Itempl+1  ; temporary integer high byte
-.ifdef APPLE2
-a2_ioptr             = Itempl
-.endif
 
 nums_1            = Itempl    ; number to bin/hex string convert MSB
 nums_2            = nums_1+1  ; number to bin/hex string convert
@@ -460,8 +457,10 @@ ccnull            .byte $00   ; see below
 VEC_CC            .word $0000 ; see below
 ; other values follow, may be pre-initialized or initialized by loader
 FILE_BUFS         .byte NUM_FILE_BUFS   ; # of file buffers
+RAM_BASE          .word $800
 RAM_TOP           .word __interp_RUN__-(NUM_FILE_BUFS*$400)  ; inital RAM TOP
 WS_VEC            jmp LDR_CALLBACK ; called every warm start
+
 ; Active default I/O vectors
 IO_PINIT          .addr A2_STDIO_PINIT     ; only used when initing
 IO_IN_PREAD       .addr A2_STDIO_PREAD
@@ -543,7 +542,7 @@ Ibuffe            = Ibuffs+$47; end of input buffer
 .endif
 
 .ifdef APPLE2
-Ram_base          = $0800     ; start of user RAM (set as needed, should be page aligned)
+;Ram_base          = $0800     ; start of user RAM (set as needed, should be page aligned)
 ; Ram_top           = $2000     ; end of user RAM+1 (set as needed, should be page aligned)
 .else
 Ram_base          = $0300     ; start of user RAM (set as needed, should be page aligned)
@@ -736,6 +735,12 @@ TabLoop
       BPL   TabLoop           ; loop if not all done
 
 ; set-up start values
+.ifdef APPLE2
+      LDA   RAM_BASE
+      STA   Itempl
+      LDA   RAM_BASE+1
+      STA   Itemph
+.endif
 
       LDA   #$00              ; clear A
 .ifndef NO_INT
@@ -744,7 +749,7 @@ TabLoop
 .endif
       STA   FAC1_o            ; clear FAC1 overflow byte
       STA   last_sh           ; clear descriptor stack top item pointer high byte
-.if APPLE2
+.ifdef APPLE2
       LDA   #8                ; set default tab size
 .else
       LDA   #$0E              ; set default tab size
@@ -836,27 +841,39 @@ MEM_OK
       STY   Ememh             ; set end of mem high byte
       STA   Sstorl            ; set bottom of string space low byte
       STY   Sstorh            ; set bottom of string space high byte
-
+.ifdef APPLE2
+      LDY   RAM_BASE          ; from global page
+      LDX   RAM_BASE+1        ; from global page
+.else
       LDY   #<Ram_base        ; set start addr low byte
       LDX   #>Ram_base        ; set start addr high byte
+.endif
       STY   Smeml             ; save start of mem low byte
       STX   Smemh             ; save start of mem high byte
 
 ; this line is only needed if Ram_base is not $xx00
+.ifdef APPLE2
+      LDY   #$00              ; always do on Apple II
+.else
       .IF   Ram_base&$FF>0
       LDY   #$00              ; clear Y
       .ENDIF
-
+.endif
       TYA                     ; clear A
       STA   (Smeml),Y         ; clear first byte
       INC   Smeml             ; increment start of mem low byte
-
+.ifdef APPLE2
+      BNE   LAB_2E05          ; always do on Apple II
+      INC   Smemh
+LAB_2E05
+.else
 ; these two lines are only needed if Ram_base is $xxFF
 .IF   Ram_base&$FF=$FF
       BNE   LAB_2E05          ; branch if no rollover
       INC   Smemh             ; increment start of mem high byte
 LAB_2E05
 .ENDIF
+.endif
 
       JSR   LAB_CRLF          ; print CR/LF
       JSR   LAB_1463          ; do "NEW" and "CLEAR"
@@ -8319,7 +8336,11 @@ StrTab
       .byte $00               ; clear terminal position
       .byte $00               ; default terminal width byte
       .byte $F2               ; default limit for TAB = 14
+.ifdef APPLE2
+; value to be pulled from global page
+.else
       .word Ram_base          ; start of user RAM
+.endif
 EndTab
 
 LAB_MSZM
