@@ -5,7 +5,8 @@ MEMORY {
 }
 
 SEGMENTS {
-	code:   load = LOAD1;
-	global: load = LOAD1, run = GLOBAL1, define = yes;
-	interp: load = LOAD1, run = RUN1, define = yes;
+	loader: load = LOAD1, align = $100;
+	global: load = LOAD1, run = GLOBAL1, define = yes, align = $100;
+	interp: load = LOAD1, run = RUN1, define = yes, align = $100;
+	code:	load = LOAD1;
 }

@@ -513,7 +513,7 @@ SL7_PWRITE        .addr 0
 SL7_PSTATUS       .addr 0
 
 
-.res GLOBAL_PAGE+$100-*,0      ; fill out the page
+.align 256
 .popseg
 .else
 ccflag            = $0200     ; BASIC CTRL-C flag, 00 = enabled, 01 = dis
@@ -552,6 +552,8 @@ Ram_top           = $C000     ; end of user RAM+1 (set as needed, should be page
 ; This start can be changed to suit your system
 
 .ifdef APPLE2
+.pushseg
+.segment "loader"
 ; loader starts here
       jmp LDR_START
       .byte $EE,$EE           ; signature of startup file buffer
@@ -687,13 +689,16 @@ LDR_SMSG:
       .byte "Enhanced BASIC 2.22p2 / 0.1",$0D
       .byte "Apple ",$5d,$5b," port by M.G.",$0D
       .byte $00
-
+.align  256
+.popseg
 
 .segment "interp"
       ;.org  $2000
 .else
       *=    $C000
 .endif
+
+.assert (<*)=0, error, "interpreter not aligned on a page"
 
 ; BASIC cold start entry point
 
