@@ -563,27 +563,27 @@ Ram_top           = $C000     ; end of user RAM+1 (set as needed, should be page
 LDR_START
       ; init reset vector to monitor
       ; later BASIC will change it to warm start
-      lda   #<$ff59
-      sta   $3f2
-      lda   #>$ff59
-      sta   $3f3
-      eor   #$a5
-      sta   $3f4
+      lda   #<F8_MONITOR
+      sta   SOFTEV            ; RESET vector
+      lda   #>F8_MONITOR
+      sta   SOFTEV+1
+      eor   #MAGIC_A5
+      sta   POWERUP
 ; move interpreter
       lda   #<__interp_LOAD__
       ldy   #>__interp_LOAD__
-      sta   $3C               ; A1
-      sty   $3D
+      sta   ZP_A1
+      sty   ZP_A1+1
       lda   #<(__interp_LOAD__+__interp_SIZE__)
       ldy   #>(__interp_LOAD__+__interp_SIZE__)
-      sta   $3E               ; A2
-      sty   $3F
+      sta   ZP_A2
+      sty   ZP_A2+1
       lda   #<__interp_RUN__
       ldy   #>__interp_RUN__
-      sta   $42               ; A1
-      sty   $43
+      sta   ZP_A4
+      sty   ZP_A4+1
       ldy   #$00              ; required to move properly
-      jsr   $FE2C             ; MOVE
+      jsr   F8_MOVE           ; firmware move routine
 ; move globals, one page
       ldx   #$00
 :     lda   __global_LOAD__,x
@@ -594,23 +594,23 @@ LDR_START
       jsr   LDR_IOINIT        ; init basic I/O
 ; now scan slots for Pascal 1.1 firmware cards
       stz   $00
-      lda   #$C8
+      lda   #$C8              ; slot 7+1
       sta   $01
 :     dec   $01
       lda   $01
-      cmp   #$C0
+      cmp   #$C0              ; hit slot 0?
       beq   scandone
       ldy   #$05              ; offset 5
       lda   ($00),y           ; get signature byte
-      cmp   #$38
+      cmp   #$38              ; firmware card sig #1
       bne   :-
       ldy   #$07
       lda   ($00),y
-      cmp   #$18
+      cmp   #$18              ; firmware card sig #2
       bne   :-
       ldy   #$0B
       lda   ($00),y
-      cmp   #$01
+      cmp   #$01              ; sig for pascal 1.1 cards
       bne   :-
       ; all bytes matched now generate I/O pointers and such
       lda   $01
@@ -653,7 +653,13 @@ copyfwbyte2
 gpage = *-2
       rts 
 scandone
-      
+; set up ProDOS global page memory map
+      ldx   #$17
+:     lda   LDR_MEMTAB,x
+      sta   P8_MEMTAB,x
+      dex
+      bpl   :-
+
 ; launch interpreter
       jmp   __interp_RUN__
 
@@ -672,16 +678,16 @@ LDR_CALLBACK:
       ldy   #>LDR_SMSG        ; point to sign-on message (high addr)
       jsr   LAB_18C3          ; print null terminated string from memory
       ; set up permanent vectors
-      lda   #$4C
-      sta   $3F8              ; CTRL-Y vector
+      lda   #$4C              ; JMP opcode
+      sta   CTRL_Y
       ldy   $01               ; get warm start vector
       lda   $02               ; that BASIC set up already
-      sty   $3F9              ; rest of CTRL-Y
-      sta   $3FA
-      sty   $3F2              ; RESET vector
-      sta   $3F3
-      eor   #$A5              ; make check byte
-      sta   $3F4
+      sty   CTRL_Y+1
+      sta   CTRL_Y+2
+      sty   SOFTEV
+      sta   SOFTEV+1
+      eor   #MAGIC_A5
+      sta   POWERUP
       rts
     
 
@@ -689,6 +695,36 @@ LDR_SMSG:
       .byte "Enhanced BASIC 2.22p2 / 0.1",$0D
       .byte "Apple ",$5d,$5b," port by M.G.",$0D
       .byte $00
+      
+; P8 Memory map bytes, adjust to match interpreter run
+; location
+LDR_MEMTAB  ; 24 bytes
+      .byte %11001111         ; 00 0000-07FF, protect 0,1,4-7
+      .byte %00000000         ; 01 0800-0FFF
+      .byte %00000000         ; 02 1000-17FF
+      .byte %00000000         ; 03 1800-1FFF
+      .byte %00000000         ; 04 2000-27FF
+      .byte %00000000         ; 05 2800-2FFF
+      .byte %00000000         ; 06 3000-37FF
+      .byte %00000000         ; 07 3800-3FFF
+      .byte %00000000         ; 08 4000-47FF
+      .byte %00000000         ; 09 4800-4FFF
+      .byte %00000000         ; 0A 5000-57FF
+      .byte %00000000         ; 0B 5800-5FFF
+      .byte %00000000         ; 0C 6000-67FF
+      .byte %00000000         ; 0D 6800-6FFF
+      .byte %00000000         ; 0E 7000-77FF
+      .byte %00000000         ; 0F 7800-7FFF
+      .byte %00000000         ; 10 8000-87FF
+      .byte %00000011         ; 11 8800-8FFF
+      .byte %11111111         ; 12 9000-97FF
+      .byte %11111111         ; 13 9800-9FFF
+      .byte %11111111         ; 14 A000-A7FF
+      .byte %11111111         ; 15 A800-AFFF
+      .byte %11111111         ; 16 B000-B7FF
+      .byte %11111111         ; 17 B800-BFFF
+      
+      
 .align  256
 .popseg
 
@@ -8093,8 +8129,8 @@ LAB_TWOPI
 ; Apple II Additional Command implementation
 
 LAB_BYE
-      JSR   $BF00
-      .byte $65
+      JSR   P8_MLI
+      .byte $65               ; QUIT code
       .addr BYEPARMS
       BRK
 BYEPARMS
@@ -8130,13 +8166,13 @@ V_INPT
 ; if input port is 0, otherwise uses firmware routines
 V_INPT2
       LDA   IO_SLOT_IN        ; see if 'slot 0'
-      BNE   V_INPT
+      BNE   V_INPT            ; if not do standard input routine
       PHY
-      LDY   $24               ; CH
-      LDA   ($28),Y           ; BASL
-      JSR   $FD1B             ; KEYIN
+      LDY   ZP_CH             ; cursor horizontal
+      LDA   (ZP_BASL),Y       ; get character under cursor
+      JSR   F8_KEYIN          ; blocking
       EOR   #$80              ; convert to low ASCII
-      SEC
+      SEC                     ; flag got character
       PLY
       RTS
 
@@ -8200,31 +8236,31 @@ DO_VEC_IN:
 ; *************************************
 
 A2_STDIO_PINIT
-      jsr   $fb2f             ; INIT
-      jsr   $fe89             ; SETKBD
-      jsr   $fe93             ; SETVID
-      jsr   $fe84             ; SETNORM
+      jsr   F8_INIT           ; init display
+      jsr   F8_SETKBD         ; set monitor output to keyboard
+      jsr   F8_SETVID         ; set monitor output to video
+      jsr   F8_SETNORM        ; set normal video
       rts
             
 A2_STDIO_PREAD
       jsr   A2_STDIO_PSTAT_IN ; it does the needful
       bcc   :+
-      sta   $c010             ; clear keyboard strobe
+      sta   KBD_STROBE        ; clear keyboard strobe
 :     rts
 
 A2_STDIO_PWRITE
       tax
       cmp   #$0D              ; CR
       bne   :+
-      jsr   $fc9c             ; CLREOL - does not change x
+      jsr   F8_CLREOL         ; does not change x
       txa
-:     cmp   #$0C              ; clear
+:     cmp   #$0C              ; form-feed (clear screen)
       bne   :+
-      JSR   $FC58             ; HOME - does not change x
+      JSR   F8_HOME           ; does not change x
       txa
-      bra   A2_PW_DN   ; and skip actual output
+      bra   A2_PW_DN          ; and skip actual output
 :     eor   #$80              ; make apple II char
-      jsr   $FDF0             ; write to screen, preserves a
+      jsr   F8_COUT1          ; write to screen, preserves a
       eor   #$80              ; back to EhBASIC char
 A2_PW_DN
       ldx   #$00
