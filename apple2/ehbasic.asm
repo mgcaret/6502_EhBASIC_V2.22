@@ -335,8 +335,8 @@ Decssp1           = Decss+1   ; number to decimal string start
 ; token values needed for BASIC
 
 ; Potential here...
-.ifdef .APPLE2
-.ifdef .LOW_TOKENS
+.ifdef APPLE2
+.ifdef LOW_TOKENS
 ; low primary command tokens (can start a statement)
 TK_RES00          = $00             ; reserved
 TK_SCREEN         = TK_RES00        ; SCREEN token
