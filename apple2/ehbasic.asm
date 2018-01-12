@@ -29,6 +29,36 @@
 ;              tabs converted to spaces, tabwidth=6
 ; 2.22p2    fixed can't continue error on 1st statement after direct mode
 ;              changed INPUT to throw "break in line ##" on empty line input
+;
+; MG Apple II Port Changes
+; 0.1.0     Modifications to support ca65/ld65 and segmenting
+;           Conditional assembly for interrupt support, so it can be removed
+;           "PAGE2" data converted to a global page containing I/O vectors
+;           Enhanced I/O supporting "Pascal 1.1" firmware
+;           Beginnings of a _very_ enhanced I/O subsystem
+;           Loader code at standard ProDOS SYS file load address
+;             - Moves interpreter to final destination RAM
+;             - Moves global page to final destination RAM
+;             - Prints sign-on message
+;             - Sets system vectors for RESET and monitor Ctrl-Y
+;           ProDOS support.
+;           Apple II delete key and right-arrow retyping
+;           Requires 65C02 for now.
+;
+; Plans:    128K version that uses Aux RAM
+;             - Aux RAM would have:
+;               * Main interpreter code not requiring OS/Firmware
+;               * Program, Variables
+;             - Main RAM would have:
+;               * Interpreter data tables for tokenizing/detokenizing/errors
+;               * I/O buffers
+;             - Would require separating parts that require OS or firmware
+;               so they could be called from the main bank.  Strategy might be
+;               to ifdef K128 and pushseg/segment/popseg the original code
+;               and a way to get to it from there.
+
+
+
 
 ; zero page use ..
 LAB_WARM          = $00       ; BASIC warm start entry point
@@ -303,6 +333,17 @@ Decssp1           = Decss+1   ; number to decimal string start
 ;                 = $FF       ; decimal string end
 
 ; token values needed for BASIC
+
+; Potential here...
+.ifdef .APPLE2
+.ifdef .LOW_TOKENS
+; low primary command tokens (can start a statement)
+TK_RES00          = $00             ; reserved
+TK_SCREEN         = TK_RES00        ; SCREEN token
+
+.out .sprintf("Low tokens enabled, highest #: %x",TK_SCREEN)
+.endif
+.endif
 
 ; primary command tokens (can start a statement)
 
