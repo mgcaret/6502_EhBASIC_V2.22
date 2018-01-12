@@ -358,11 +358,25 @@ TK_NMI            = TK_IRQ+1        ; NMI token
 TK_NMI = TK_BITCLR ; fixup
 .endif
 .ifdef APPLE2
-TK_BYE            = TK_NMI+1        ; BYE token
+TK_HOME           = TK_NMI+1        ; HOME token
+TK_BYE            = TK_HOME+1       ; BYE token
+TK_INVERSE        = TK_BYE+1        ; INVERSE token
+TK_NORMAL         = TK_INVERSE+1    ; NORMAL token
+TK_PR             = TK_NORMAL+1     ; PR token
+TK_IN             = TK_PR+1         ; IN token
+TK_PREFIX         = TK_IN+1         ; PREFIX token
+TK_CAT            = TK_PREFIX+1     ; CAT token
+TK_OPEN           = TK_CAT+1        ; OPEN token
+TK_CLOSE          = TK_OPEN+1       ; CLOSE token
+TK_WRITE          = TK_CLOSE+1      ; WRITE token
+TK_SEEK           = TK_WRITE+1      ; SEEK token
+TK_CREATE         = TK_SEEK+1       ; CREATE token
+TK_DELETE         = TK_CREATE+1      ; DELETE token
+TK_FLUSH          = TK_DELETE+1     ; FLUSH token
 
 ; secondary command tokens, can't start a statement
 
-TK_TAB            = TK_BYE+1        ; TAB token
+TK_TAB            = TK_FLUSH+1      ; TAB token
 .else
 ; secondary command tokens, can't start a statement
 
@@ -432,6 +446,13 @@ TK_VPTR           = TK_TWOPI+1      ; VARPTR token
 TK_LEFTS          = TK_VPTR+1       ; LEFT$ token
 TK_RIGHTS         = TK_LEFTS+1      ; RIGHT$ token
 TK_MIDS           = TK_RIGHTS+1     ; MID$ token
+.ifdef APPLE2
+TK_PDL            = TK_MIDS+1       ; PDL token
+TK_BTN            = TK_PDL+1        ; BTN token
+TK_TELL           = TK_BTN+1       ; TELL token
+.endif
+
+.out .sprintf("Highest token #: %x",TK_BTN)
 
 ; offsets from a base of X or Y
 
@@ -461,12 +482,14 @@ RAM_BASE          .word $800
 RAM_TOP           .word __interp_RUN__-(NUM_FILE_BUFS*$400)  ; inital RAM TOP
 WS_VEC            jmp LDR_CALLBACK ; called every warm start
 
-; Active default I/O vectors
-IO_PINIT          .addr A2_STDIO_PINIT     ; only used when initing
+; Active Pascal I/O vectors
+IO_PINIT          .addr A2_STDIO_PINIT    ; only used when initing
 IO_IN_PREAD       .addr A2_STDIO_PREAD
 IO_IN_PSTATUS     .addr A2_STDIO_PSTATUS
 IO_OUT_PWRITE     .addr A2_STDIO_PWRITE
-IO_OUT_PSTATUS    .addr A2_STDIO_PSTATUS  
+IO_OUT_PSTATUS    .addr A2_STDIO_PSTATUS
+IO_A2_INPT        jmp   V_INPT_MON        ; we set firmware KSW vector to this
+IO_A2_OUTP        jmp   V_OUTP_MON        ; we set firmware CSW vector to this
 ; Active default I/O info
 IO_SLOT_IN        .byte $0    ; slot * $10
 IO_SLOT_OUT       .byte $0    ; slot * $10
@@ -1290,7 +1313,7 @@ LAB_134B
       JSR   LAB_PRNA          ; go print the character
       DEX                     ; decrement the buffer counter (delete)
 .ifdef APPLE2
-      BNE   LAB_1359          ; skip zeroing line unless it's zero anyway
+      BRA   LAB_1359          ; skip zeroing line
 .else
       .byte $2C               ; make LDX into BIT abs
 .endif
@@ -1306,7 +1329,7 @@ LAB_1359
       CPX   Temp3
       BCC   :+
       STX   Temp3             ; update max input
-:     JSR   V_INPT2
+:     JSR   V_INPT2           ; workaround to show cursor on 40-col
       CMP   #$7F              ; Apple //e and newer DELETE key
       BNE   :+
       LDA   #$08              ; translate to backspace
@@ -8151,7 +8174,10 @@ BYEPARMS
 V_INPT
       PHX
       PHY
-      JSR   DO_VEC_IN_STATUS  ; get device status
+      INC   ZP_RNDL           ; Apple II random seed
+      BNE   :+
+      INC   ZP_RNDH
+:     JSR   DO_VEC_IN_STATUS  ; get device status
       BCC   :+                ; cc = not ready
       JSR   DO_VEC_IN         ; get waiting char
       CPX   #$00              ; carry is set
@@ -8169,14 +8195,29 @@ V_INPT2
       BNE   V_INPT            ; if not do standard input routine
       PHY
       LDY   ZP_CH             ; cursor horizontal
-      LDA   (ZP_BASL),Y       ; get character under cursor
+      LDA   (ZP_BASL),Y       ; get character under cursor     
       JSR   F8_KEYIN          ; blocking
-      EOR   #$80              ; convert to low ASCII
+      AND   #$7F              ; convert to low ASCII
       SEC                     ; flag got character
       PLY
       RTS
 
-V_OUTP:
+; Blocking input routine for Apple II KSW vector
+V_INPT_MON
+      PHA
+      LDA   IO_SLOT_IN        ; slot 0?
+      BNE   :++               ; nope, do V_INPT loop
+      PLA
+      JMP   F8_KEYIN          ; straight into F8 keyboard handler
+:     PLA
+      JSR   V_INPT            ; non-blocking input
+      BCC   :-                ; not ready, do again
+      ORA   #$80              ; set high bit
+      LDY   ZP_CH             ; monitor promises to return this
+      RTS
+
+; output routine
+V_OUTP
       PHA
       PHX
       PHY
@@ -8203,7 +8244,12 @@ DO_OUT:
       PLA
       RTS
 
-DO_VEC_PINIT:
+; Onput routine for Apple II KSW vector
+V_OUTP_MON
+      AND   #$7F              ; firmware always sends high bit set
+      BRA   V_OUTP
+
+DO_VEC_PINIT
       lda   IO_PINIT+1
       tax
       asl
@@ -8211,21 +8257,21 @@ DO_VEC_PINIT:
       asl
       tay
       jmp   (IO_PINIT)
-DO_VEC_OUT_STATUS:
+DO_VEC_OUT_STATUS
       ldx   IO_OUT_PSTATUS+1  ; $Cn
       ldy   IO_SLOT_OUT       ; $n0
       lda   #$00
       JMP   (IO_OUT_PSTATUS)
-DO_VEC_OUT:
+DO_VEC_OUT
       ldx   IO_OUT_PWRITE+1   ; $Cn
       ldy   IO_SLOT_OUT       ; $n0
       JMP   (IO_OUT_PWRITE)
-DO_VEC_IN_STATUS:
+DO_VEC_IN_STATUS
       ldx   IO_IN_PSTATUS+1   ; $Cn
       ldy   IO_SLOT_IN        ; $n0
       lda   #$01              ; input status
       jmp   (IO_IN_PSTATUS)
-DO_VEC_IN:
+DO_VEC_IN
       ldx   IO_IN_PREAD+1     ; $Cn
       ldy   IO_SLOT_IN        ; $n0
       JMP   (IO_IN_PREAD)
@@ -8237,8 +8283,14 @@ DO_VEC_IN:
 
 A2_STDIO_PINIT
       jsr   F8_INIT           ; init display
-      jsr   F8_SETKBD         ; set monitor output to keyboard
-      jsr   F8_SETVID         ; set monitor output to video
+      lda   #<IO_A2_INPT      ; setup firmware input vector
+      sta   ZP_KSWL
+      lda   #>IO_A2_INPT
+      sta   ZP_KSWH
+      lda   #<IO_A2_OUTP      ; setup firmware input vector
+      sta   ZP_CSWL
+      lda   #>IO_A2_OUTP
+      sta   ZP_CSWH      
       jsr   F8_SETNORM        ; set normal video
       rts
             
@@ -8277,6 +8329,11 @@ A2_STDIO_PSTAT_IN
       lsr                     ; shift right, b0 -> c
 :     ldx   #$00              ; success!
       rts
+
+; RESET key handler
+V_RESET
+      JSR   A2_STDIO_PINIT
+      JMP   LAB_WARM
 
 ; *************************************        
       
