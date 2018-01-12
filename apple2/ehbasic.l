@@ -1,0 +1,11 @@
+MEMORY {
+	LOAD1: start = $2000, size = $3F00;
+	RUN1: start = $8E00, size = $3000;
+	GLOBAL1: start = $BE00, size = $100;
+}
+
+SEGMENTS {
+	code:   load = LOAD1;
+	global: load = LOAD1, run = GLOBAL1, define = yes;
+	interp: load = LOAD1, run = RUN1, define = yes;
+}
