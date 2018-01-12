@@ -675,8 +675,8 @@ LDR_CALLBACK:
     
 
 LDR_SMSG:
-      .byte "Enhanced BASIC 2.22p2",$0D
-      .byte "for Apple ",$5d,$5b," by M.G.",$0D
+      .byte "Enhanced BASIC 2.22p2 / 0.1",$0D
+      .byte "Apple ",$5d,$5b," port by M.G.",$0D
       .byte $00
 
 
