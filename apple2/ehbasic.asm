@@ -335,14 +335,16 @@ Decssp1           = Decss+1   ; number to decimal string start
 ; token values needed for BASIC
 
 ; Potential here...
-.ifdef APPLE2
+
 .ifdef LOW_TOKENS
 ; low primary command tokens (can start a statement)
 TK_RES00          = $00             ; reserved
+
+.ifdef APPLE2
 TK_SCREEN         = TK_RES00        ; SCREEN token
+.endif
 
 .out .sprintf("Low tokens enabled, highest #: %x",TK_SCREEN)
-.endif
 .endif
 
 ; primary command tokens (can start a statement)
@@ -1449,6 +1451,15 @@ LAB_13AC
       BIT   Oquote            ; check quote mode
       BVS   :+                ; skip upper casing if DATA
       JSR   K_2UPPER
+:
+.endif
+.ifdef LOW_TOKENS
+      CMP   #$20
+      BCS   :+                ; skip if not unprintable
+      BIT   Oquote            ; check quote mode
+      BVS   :+                ; don't do if quoting
+      INX                     ; skip this byte
+      BNE   LAB_13AC          ; and go back to processing
 :
 .endif
       CMP   #'_'              ; compare with "_"
