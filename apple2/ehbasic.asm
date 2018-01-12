@@ -268,6 +268,7 @@ Rbyte1            = Rbyte4+1  ; most significant PRNG byte
 Rbyte2            = Rbyte4+2  ; middle PRNG byte
 Rbyte3            = Rbyte4+3  ; least significant PRNG byte
 
+.ifndef NO_INT
 NmiBase           = $DC       ; NMI handler enabled/setup/triggered flags
                               ; bit function
                               ; === ========
@@ -279,6 +280,7 @@ NmiBase           = $DC       ; NMI handler enabled/setup/triggered flags
 IrqBase           = $DF       ; IRQ handler enabled/setup/triggered flags
 ;                 = $E0       ; IRQ handler addr low byte
 ;                 = $E1       ; IRQ handler addr high byte
+.endif
 
 ;                 = $DE       ; unused
 ;                 = $DF       ; unused
@@ -321,8 +323,12 @@ TK_RUN            = TK_GOTO+1       ; RUN token
 TK_IF             = TK_RUN+1        ; IF token
 TK_RESTORE        = TK_IF+1         ; RESTORE token
 TK_GOSUB          = TK_RESTORE+1    ; GOSUB token
+.ifndef NO_INT
 TK_RETIRQ         = TK_GOSUB+1      ; RETIRQ token
 TK_RETNMI         = TK_RETIRQ+1     ; RETNMI token
+.else
+TK_RETNMI = TK_GOSUB ; fixup
+.endif
 TK_RETURN         = TK_RETNMI+1     ; RETURN token
 TK_REM            = TK_RETURN+1     ; REM token
 TK_STOP           = TK_REM+1        ; STOP token
@@ -348,8 +354,12 @@ TK_GET            = TK_WIDTH+1      ; GET token
 TK_SWAP           = TK_GET+1        ; SWAP token
 TK_BITSET         = TK_SWAP+1       ; BITSET token
 TK_BITCLR         = TK_BITSET+1     ; BITCLR token
+.ifndef NO_INT
 TK_IRQ            = TK_BITCLR+1     ; IRQ token
 TK_NMI            = TK_IRQ+1        ; NMI token
+.else
+TK_NMI = TK_BITCLR ; fixup
+.endif
 .ifdef APPLE2
 TK_BYE            = TK_NMI+1        ; BYE token
 
@@ -728,8 +738,10 @@ TabLoop
 ; set-up start values
 
       LDA   #$00              ; clear A
+.ifndef NO_INT
       STA   NmiBase           ; clear NMI handler enabled flag
       STA   IrqBase           ; clear IRQ handler enabled flag
+.endif
       STA   FAC1_o            ; clear FAC1 overflow byte
       STA   last_sh           ; clear descriptor stack top item pointer high byte
 .if APPLE2
@@ -1034,9 +1046,13 @@ LAB_1269
 LAB_1274
                               ; clear ON IRQ/NMI bytes
       LDA   #$00              ; clear A
+.ifndef NO_INT
       STA   IrqBase           ; clear enabled byte
       STA   NmiBase           ; clear enabled byte
+.endif
+.ifdef APPLE2
       JSR   WS_VEC            ; warmstart vector in global page
+.endif
       LDA   #<LAB_RMSG        ; point to "Ready" message low byte
       LDY   #>LAB_RMSG        ; point to "Ready" message high byte
 
@@ -2022,11 +2038,12 @@ LAB_CONT
 
                               ; we can continue so ..
 LAB_166C
+.ifndef NO_INT
       LDA   #TK_ON            ; set token for ON
       JSR   LAB_IRQ           ; set IRQ flags
       LDA   #TK_ON            ; set token for ON
       JSR   LAB_NMI           ; set NMI flags
-
+.endif
       STY   Bpntrh            ; save BASIC execute pointer high byte
       LDA   Cpntrl            ; get continue pointer low byte
       STA   Bpntrl            ; save BASIC execute pointer low byte
@@ -2396,6 +2413,7 @@ LAB_16FD
 ; perform ON
 
 LAB_ON
+.ifndef NO_INT
       CMP   #TK_IRQ           ; was it IRQ token ?
       BNE   LAB_NOIN          ; if not go check NMI
 
@@ -2406,7 +2424,7 @@ LAB_NOIN
       BNE   LAB_NONM          ; if not go do normal ON command
 
       JMP   LAB_SNMI          ; else go set-up NMI
-
+.endif
 LAB_NONM
       JSR   LAB_GTBY          ; get byte parameter
       PHA                     ; push GOTO/GOSUB token
@@ -7575,15 +7593,17 @@ LAB_FBA0
 
       DEC   ccnull            ; else decrement countdown
 LAB_FBA2
+.ifndef NO_INT
       LDX   #NmiBase          ; set pointer to NMI values
       JSR   LAB_CKIN          ; go check interrupt
       LDX   #IrqBase          ; set pointer to IRQ values
       JSR   LAB_CKIN          ; go check interrupt
+.endif
 LAB_CRTS
       RTS
 
 ; check whichever interrupt is indexed by X
-
+.ifndef NO_INT
 LAB_CKIN
       LDA   PLUS_0,X          ; get interrupt flag byte
       BPL   LAB_CRTS          ; branch if interrupt not enabled
@@ -7625,6 +7645,7 @@ LAB_CKIN
                               ; can't RTS, we used the stack! the RTS from the ctrl-c
                               ; check will be taken when the RETIRQ/RETNMI/RETURN is
                               ; executed at the end of the subroutine
+.endif ; NO_INT
 
 ; get byte from input device, no waiting
 ; returns with carry set if byte in A
@@ -7644,6 +7665,7 @@ LAB_FB95
 LAB_FB96
       RTS
 
+.ifndef NO_INT
 ; these routines only enable the interrupts if the set-up flag is set
 ; if not they have no effect
 
@@ -7745,6 +7767,7 @@ LAB_RETNMI
       ORA   NmiBase           ; OR in setup flag
       STA   NmiBase           ; save enabled flag
       JMP   LAB_16E8          ; go do rest of RETURN
+.endif ; NO_INT
 
 ; MAX() MIN() pre process
 
@@ -8445,8 +8468,10 @@ LAB_CTBL
       .word LAB_IF-1          ; IF
       .word LAB_RESTORE-1     ; RESTORE         modified command
       .word LAB_GOSUB-1       ; GOSUB
+.ifndef NO_INT
       .word LAB_RETIRQ-1      ; RETIRQ          new command
       .word LAB_RETNMI-1      ; RETNMI          new command
+.endif
       .word LAB_RETURN-1      ; RETURN
       .word LAB_REM-1         ; REM
       .word LAB_STOP-1        ; STOP
@@ -8472,8 +8497,10 @@ LAB_CTBL
       .word LAB_SWAP-1        ; SWAP            new command
       .word LAB_BITSET-1      ; BITSET          new command
       .word LAB_BITCLR-1      ; BITCLR          new command
+.ifndef NO_INT
       .word LAB_IRQ-1         ; IRQ             new command
       .word LAB_NMI-1         ; NMI             new command
+.endif
 .ifdef APPLE2
       .word LAB_BYE-1         ; BYE             back to ProDOS
 .endif
@@ -8778,9 +8805,11 @@ LBB_INPUT
       .byte "NPUT",TK_INPUT   ; INPUT
 LBB_INT
       .byte "NT(",TK_INT      ; INT(
+.ifndef NO_INT
 LBB_IRQ
       .byte "RQ",TK_IRQ       ; IRQ
       .byte $00
+.endif
 TAB_ASCL
 LBB_LCASES
       .byte "CASE$(",TK_LCASES
@@ -8813,8 +8842,10 @@ LBB_NEW
       .byte "EW",TK_NEW       ; NEW
 LBB_NEXT
       .byte "EXT",TK_NEXT     ; NEXT
+.ifndef NO_INT
 LBB_NMI
       .byte "MI",TK_NMI       ; NMI
+.endif
 LBB_NOT
       .byte "OT",TK_NOT       ; NOT
 LBB_NULL
@@ -8848,10 +8879,12 @@ LBB_REM
 LBB_RESTORE
       .byte "ESTORE",TK_RESTORE
                               ; RESTORE
+.ifndef NO_INT
 LBB_RETIRQ
       .byte "ETIRQ",TK_RETIRQ ; RETIRQ
 LBB_RETNMI
       .byte "ETNMI",TK_RETNMI ; RETNMI
+.endif
 LBB_RETURN
       .byte "ETURN",TK_RETURN ; RETURN
 LBB_RIGHTS
@@ -8959,10 +8992,12 @@ LAB_KEYT
       .byte 5,'G'
       .word LBB_GOSUB         ; GOSUB
       .byte 6,'R'
+.ifndef NO_INT
       .word LBB_RETIRQ        ; RETIRQ
       .byte 6,'R'
       .word LBB_RETNMI        ; RETNMI
       .byte 6,'R'
+.endif
       .word LBB_RETURN        ; RETURN
       .byte 3,'R'
       .word LBB_REM           ; REM
@@ -9012,10 +9047,12 @@ LAB_KEYT
       .word LBB_BITSET        ; BITSET
       .byte 6,'B'
       .word LBB_BITCLR        ; BITCLR
+.ifndef NO_INT
       .byte 3,'I'
       .word LBB_IRQ           ; IRQ
       .byte 3,'N'
       .word LBB_NMI           ; NMI
+.endif
 .ifdef APPLE2
       .byte 3,'B'
       .word LBB_BYE           ; BYE
