@@ -343,6 +343,15 @@ TK_RES00          = $00             ; reserved
 .ifdef APPLE2
 TK_SCREEN         = TK_RES00+1      ; SCREEN token
 TK_CLS            = TK_SCREEN+1     ; CLS token
+TK_GR             = TK_CLS+1        ; GR
+TK_COLOR          = TK_GR+1         ; COLOR=
+TK_PLOT           = TK_COLOR+1      ; PLOT
+TK_HLIN           = TK_PLOT+1       ; HLIN
+TK_VLIN           = TK_HLIN+1       ; VLIN
+TK_HGR            = TK_VLIN+1       ; HGR & HGR 2
+TK_HCOLOR         = TK_HGR+1        ; HCOLOR=
+TK_HPLOT          = TK_HCOLOR+1     ; HPLOT
+TK_
 .endif
 
 .out .sprintf("Low tokens enabled, highest #: %x",TK_CLS)
@@ -493,10 +502,12 @@ TK_MIDS           = TK_RIGHTS+1     ; MID$ token
 .ifdef APPLE2
 TK_PDL            = TK_MIDS+1       ; PDL token
 TK_BTN            = TK_PDL+1        ; BTN token
-TK_TELL           = TK_BTN+1       ; TELL token
+TK_TELL           = TK_BTN+1        ; TELL token
+TK_SCRN           = TK_TELL+1       ; SCRN
+TK_HSCRN          = TK_SCRN+1       ; HSCRN
 .endif
 
-.out .sprintf("Highest token #: %x",TK_BTN)
+.out .sprintf("Highest token #: %x",TK_HSCRN)
 
 ; offsets from a base of X or Y
 
@@ -9563,5 +9574,4 @@ LAB_RMSG    .byte $0D,$0A,"Ready",$0D,$0A,$00
 LAB_IMSG    .byte " Extra ignored",$0D,$0A,$00
 LAB_REDO    .byte " Redo from start",$0D,$0A,$00
 .endif
-
 AA_end_basic
