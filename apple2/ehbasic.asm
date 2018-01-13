@@ -796,7 +796,7 @@ LDR_MEMTAB  ; 24 bytes
 .popseg
 
 .segment "interp"
-      .org  $8e00            ; change and uncomment for easier debugging
+      ;.org  $8e00            ; change and uncomment for easier debugging
 .else
       *=    $C000
 .endif
@@ -9473,7 +9473,15 @@ LAB_BAER
       .word ERR_CN            ;$1E continue error
       .word ERR_UF            ;$20 undefined function
       .word ERR_LD            ;$22 LOOP without DO
-
+.ifdef APPLE2
+      .word ERR_XC            ;$24 undefined variable
+      .word ERR_XC            ;$26 undimensioned array
+      .word ERR_UA            ;$28 unimplemented
+      .word ERR_IA            ;$2A illegal argument
+      .word ERR_IO            ;$2C i/o error
+      .word ERR_ND            ;$2E no device connected
+      .word ERR_P8            ;$30 prodos
+.else
 ; I may implement these two errors to force definition of variables and
 ; dimensioning of arrays before use.
 
@@ -9482,7 +9490,37 @@ LAB_BAER
 ; the above error has been tested and works (see code and comments below LAB_1D8B)
 
 ;     .word ERR_UA            ;$26 undimensioned array
+.endif
 
+.ifdef APPLE2
+; made some of these smaller, added a few
+; TODO: consider packing/compression
+ERR_NF      .byte "NEXT w/o FOR",$00
+ERR_SN      .byte "Syntax",$00
+ERR_RG      .byte "RETURN w/o GOSUB",$00
+ERR_OD      .byte "Out of DATA",$00
+ERR_FC      .byte "Function call",$00
+ERR_OV      .byte "Overflow",$00
+ERR_OM      .byte "Out of memory",$00
+ERR_US      .byte "Undef'd statement",$00
+ERR_BS      .byte "Array bounds",$00
+ERR_DD      .byte "Double dimension",$00
+ERR_D0      .byte "Divide by zero",$00
+ERR_ID      .byte "Illegal direct",$00
+ERR_TM      .byte "Type mismatch",$00
+ERR_LS      .byte "String too long",$00
+ERR_ST      .byte "String too complex",$00
+ERR_CN      .byte "Can't continue",$00
+ERR_UF      .byte "Undefined function",$00
+ERR_LD      .byte "LOOP without DO",$00
+ERR_XC      .byte "Unimplemented",$00
+ERR_IA      .byte "Illegal argument",$00
+ERR_P8_IO   ; dual-purpose
+ERR_IO      .byte "I/O error",$00
+ERR_P8_ND   ; dual-purpose
+ERR_ND      .byte "No device connected",$00
+ERR_P8      .byte "ProDOS",$00
+.else
 ERR_NF      .byte "NEXT without FOR",$00
 ERR_SN      .byte "Syntax",$00
 ERR_RG      .byte "RETURN without GOSUB",$00
@@ -9507,6 +9545,8 @@ ERR_LD      .byte "LOOP without DO",$00
 ; the above error has been tested and works (see code and comments below LAB_1D8B)
 
 ;ERR_UA     .byte "Undimensioned array",$00
+.endif
+
 .ifdef APPLE2
 LAB_BMSG    .byte $0D,"Break",$00
 .else
