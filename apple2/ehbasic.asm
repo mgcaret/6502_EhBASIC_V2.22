@@ -9476,7 +9476,7 @@ LAB_BAER
 .ifdef APPLE2
       .word ERR_XC            ;$24 undefined variable
       .word ERR_XC            ;$26 undimensioned array
-      .word ERR_UA            ;$28 unimplemented
+      .word ERR_XC            ;$28 unimplemented
       .word ERR_IA            ;$2A illegal argument
       .word ERR_IO            ;$2C i/o error
       .word ERR_ND            ;$2E no device connected
