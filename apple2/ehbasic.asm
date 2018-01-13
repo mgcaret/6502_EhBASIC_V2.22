@@ -341,10 +341,11 @@ Decssp1           = Decss+1   ; number to decimal string start
 TK_RES00          = $00             ; reserved
 
 .ifdef APPLE2
-TK_SCREEN         = TK_RES00        ; SCREEN token
+TK_SCREEN         = TK_RES00+1      ; SCREEN token
+TK_CLS            = TK_SCREEN+1     ; CLS token
 .endif
 
-.out .sprintf("Low tokens enabled, highest #: %x",TK_SCREEN)
+.out .sprintf("Low tokens enabled, highest #: %x",TK_CLS)
 .endif
 
 ; primary command tokens (can start a statement)
@@ -795,7 +796,7 @@ LDR_MEMTAB  ; 24 bytes
 .popseg
 
 .segment "interp"
-      ;.org  $2000
+      .org  $8e00            ; change and uncomment for easier debugging
 .else
       *=    $C000
 .endif
@@ -1435,6 +1436,15 @@ LAB_138E
 ; position independent buffer version ..
 ; faster, dictionary search version ....
 
+.ifdef LOW_TOKENS
+; Low token handling
+LAB_13A0
+      BIT   Oquote            ; check quote mode
+      BVS   :+                ; don't do if quoting
+      INX                     ; skip this byte
+      BNE   LAB_13AC          ; and go back to processing
+.endif
+
 LAB_13A6
       LDY   #$FF              ; set save index (makes for easy math later)
 
@@ -1455,12 +1465,7 @@ LAB_13AC
 .endif
 .ifdef LOW_TOKENS
       CMP   #$20
-      BCS   :+                ; skip if not unprintable
-      BIT   Oquote            ; check quote mode
-      BVS   :+                ; don't do if quoting
-      INX                     ; skip this byte
-      BNE   LAB_13AC          ; and go back to processing
-:
+      BCC   LAB_13A0          ; skip if not unprintable
 .endif
       CMP   #'_'              ; compare with "_"
       BCS   LAB_13EC          ; if >= go save byte then continue crunching
@@ -1521,6 +1526,10 @@ LAB_13D6
       LDA   (ut2_pl),Y        ; get byte from table
 LAB_13D8
       BMI   LAB_13EA          ; all bytes matched so go save token
+.ifdef LOW_TOKENS
+      CMP   #$20              ; is low token?
+      BCC   LAB_13EA          ; yes, go save it
+.endif
 
       INX                     ; next buffer byte
 .ifdef APPLE2
@@ -1533,6 +1542,10 @@ LAB_13D8
       BEQ   LAB_13D6          ; go compare next if match
 
       BNE   LAB_1417          ; branch if >< (not found keyword)
+.ifdef LOW_TOKENS
+LAX_13AC
+      BRA   LAB_13AC
+.endif
 
 LAB_13EA
       LDY   csidx             ; restore save index
@@ -1558,8 +1571,11 @@ LAB_13FF
       STA   Oquote            ; save token-$3A (clear for ":", TK_DATA-$3A for DATA)
 LAB_1401
       EOR   #TK_REM-$3A       ; effectively subtract REM token offset
+.ifdef LOW_TOKENS
+      BNE   LAX_13AC          ; because we get out of range with low tokens
+.else
       BNE   LAB_13AC          ; If wasn't REM then go crunch rest of line
-
+.endif
       STA   Asrch             ; else was REM so set search for [EOL]
 
                               ; loop for REM, "..." etc.
@@ -1586,9 +1602,15 @@ LAB_141B
       LDA   (ut2_pl),Y        ; get table byte
       PHP                     ; save status
       INY                     ; increment table index
+.ifdef LOW_TOKENS
+      CMP   #$20
+      BCC  LAB_1420           ; have low token
+.endif
       PLP                     ; restore byte status
       BPL   LAB_141B          ; if not end of keyword go do next
-
+.ifdef LOW_TOKENS
+LAB_141D
+.endif
       LDA   (ut2_pl),Y        ; get byte from keyword table
       BNE   LAB_13D8          ; go test next word if not zero byte (end of table)
 
@@ -1598,6 +1620,11 @@ LAB_141B
                               ; go save byte in output and continue crunching
 
                               ; reached [EOL]
+.ifdef LOW_TOKENS
+LAB_1420
+      PLP                     ; clean stack
+      BRA   LAB_141D
+.endif
 LAB_142A
       INY                     ; increment pointer
       INY                     ; increment pointer (makes it next line pointer high byte)
@@ -1838,9 +1865,28 @@ LAB_1519
 LAB_152B
       RTS
 
-LAB_152E
-      BPL   LAB_150C          ; just go print it if not token byte
+.ifdef LOW_TOKENS
+LAB_152C
+      CMP   #$20
+      BCS   LAB_150C          ; not low token, go print it
+      LDX   #>LAB_KEYL        ; low token table address high byte
+      ASL                     ; *2
+      ASL                     ; *4
+      BCC   :+
+      INX
+      CLC
+:     ADC   #<LAB_KEYL        ; add low byte
+      BCC   LAB_1530
+      INX
+      BRA   LAB_1530          ; back to decoding
+.endif
 
+LAB_152E
+.ifdef LOW_TOKENS
+      BPL   LAB_152C
+.else
+      BPL   LAB_150C          ; just go print it if not token byte
+.endif
                               ; else was token byte so uncrunch it (maybe)
       BIT   Oquote            ; test the open quote flag
       BMI   LAB_150C          ; just go print character if open quote set
@@ -2015,6 +2061,10 @@ LAB_15FF
       BEQ   LAB_1628          ; exit if zero [EOL]
 
 LAB_1602
+.ifdef LOW_TOKENS
+      CMP   #$20
+      BCC   LAB_1620          ; have low token
+.endif
       ASL                     ; *2 bytes per vector and normalise token
       BCS   LAB_1609          ; branch if was token
 
@@ -2035,6 +2085,17 @@ LAB_1609
       PHA                     ; onto stack
       JMP   LAB_IGBY          ; jump to increment and scan memory
                               ; then "return" to vector
+
+.ifdef LOW_TOKENS
+LAB_1620
+      ASL
+      TAY
+      LDA   LAB_LTBL+1,Y
+      PHA
+      LDA   LAB_LTBL,Y
+      PHA
+      JMP   LAB_IGBY
+.endif
 
 ; CTRL-C check jump. this is called as a subroutine but exits back via a jump if a
 ; key press is detected.
@@ -8624,6 +8685,16 @@ LAB_2A9C = LAB_2A9B+1
       .byte $FF,$FF,$F6       ; -10
       .byte $00,$00,$01       ; 1
 
+.ifdef LOW_TOKENS
+LAB_LTBL
+      .word LAB_OMER-1        ; reserved, print out of memory error
+.ifdef APPLE2
+      .word LAB_OMER-1        ; SCREEN
+      .word LAB_OMER-1        ; CLS
+.endif
+.endif
+
+
 LAB_CTBL
       .word LAB_END-1         ; END
       .word LAB_FOR-1         ; FOR
@@ -8910,6 +8981,12 @@ LBB_BYE
 .endif
       .byte $00
 TAB_ASCC
+.ifdef LOW_TOKENS
+.ifdef APPLE2
+LBB_CLS
+      .byte "LS",TK_CLS       ; CLS
+.endif
+.endif
 LBB_CALL
       .byte "ALL",TK_CALL     ; CALL
 LBB_CHRS
@@ -9067,6 +9144,12 @@ LBB_RUN
       .byte "UN",TK_RUN       ; RUN
       .byte $00
 TAB_ASCS
+.ifdef LOW_TOKENS
+.ifdef APPLE2
+LBB_SCREEN
+      .byte "CREEN",TK_SCREEN ; SCREEN
+.endif
+.endif
 LBB_SADD
       .byte "ADD(",TK_SADD    ; SADD(
 LBB_SAVE
@@ -9132,6 +9215,19 @@ TAB_POWR
 ; word - pointer to rest of keyword from dictionary
 
 ; note if length is 1 then the pointer is ignored
+
+.ifdef LOW_TOKENS
+LAB_KEYL
+      .byte 1,'@'             ; Should never happen
+      .word $0000
+.ifdef APPLE2
+      .byte 6,'S'
+      .word LBB_SCREEN        ; SCREEN
+      .byte 3,'C'
+      .word LBB_CLS           ; CLS
+.endif
+.endif
+
 
 LAB_KEYT
       .byte 3,'E'

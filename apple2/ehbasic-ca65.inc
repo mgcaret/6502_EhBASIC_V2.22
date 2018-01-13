@@ -1,5 +1,6 @@
 APPLE2 = 1
 NO_INT = 1
+LOW_TOKENS = 1
 
 ; Version of Apple ][ Port
 VERSION = $01
