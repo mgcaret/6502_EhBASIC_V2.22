@@ -415,8 +415,8 @@ TK_HOME           = TK_NMI+1        ; HOME token
 TK_BYE            = TK_HOME+1       ; BYE token
 TK_INVERSE        = TK_BYE+1        ; INVERSE token
 TK_NORMAL         = TK_INVERSE+1    ; NORMAL token
-TK_PR             = TK_NORMAL+1     ; PR token
-TK_IN             = TK_PR+1         ; IN token
+TK_PR             = TK_NORMAL+1     ; PR# token
+TK_IN             = TK_PR+1         ; IN# token
 TK_PREFIX         = TK_IN+1         ; PREFIX token
 TK_CAT            = TK_PREFIX+1     ; CAT token
 TK_OPEN           = TK_CAT+1        ; OPEN token
@@ -500,14 +500,15 @@ TK_LEFTS          = TK_VPTR+1       ; LEFT$ token
 TK_RIGHTS         = TK_LEFTS+1      ; RIGHT$ token
 TK_MIDS           = TK_RIGHTS+1     ; MID$ token
 .ifdef APPLE2
-TK_PDL            = TK_MIDS+1       ; PDL token
+TK_GLOBAL         = TK_MIDS+1       ; GLOBAL token
+TK_PDL            = TK_GLOBAL+1     ; PDL token
 TK_BTN            = TK_PDL+1        ; BTN token
 TK_TELL           = TK_BTN+1        ; TELL token
-TK_SCRN           = TK_TELL+1       ; SCRN
-TK_HSCRN          = TK_SCRN+1       ; HSCRN
-.endif
+TK_SCRN           = TK_TELL+1       ; SCRN token
+TK_HSCRN          = TK_SCRN+1       ; HSCRN token
 
 .out .sprintf("Highest token #: %x",TK_HSCRN)
+.endif
 
 ; offsets from a base of X or Y
 
@@ -532,9 +533,15 @@ ccbyte            .byte $00   ; see below
 ccnull            .byte $00   ; see below
 VEC_CC            .word $0000 ; see below
 ; other values follow, may be pre-initialized or initialized by loader
-FILE_BUFS         .byte NUM_FILE_BUFS   ; # of file buffers
+FILE_BUFS         .byte NUM_FILE_BUFS   ; # of file buffers-1 (last one reserved)
 RAM_BASE          .word $800
-RAM_TOP           .word __interp_RUN__-(NUM_FILE_BUFS*$400)  ; inital RAM TOP
+RAM_TOP           .word __interp_RUN__-((NUM_FILE_BUFS+1)*$400)  ; initial RAM TOP
+SYS_A             .byte $00   ; A register for SYS command
+SYS_X             .byte $00   ; X register for SYS command
+SYS_Y             .byte $00   ; Y register for SYS command
+SYS_P             .byte $00   ; P register for sys command
+SYS_BANK          .byte $00   ; 0 = main bank, 1 = aux bank
+SYS_VEC           .word $0000 ; address of SYS called routine
 WS_VEC            jmp LDR_CALLBACK ; called every warm start
 
 ; Active Pascal I/O vectors
@@ -1149,6 +1156,12 @@ LAB_1238
                               ; ok exit, carry clear
 LAB_124B
       RTS
+
+.ifdef APPLE2
+LAB_XCER
+      LDX   #$28
+      BNE   LAB_XERR
+.endif
 
 ; do "Out of memory" error then warm start
 
@@ -7777,6 +7790,14 @@ LAB_CBIN
 LAB_EXCH
       JMP   LAB_28F6          ; evaluate -ve flag and return
 
+.ifdef APPLE2
+; wait for a keypress
+LAB_PAUS
+      JSR   V_INPT
+      BCC   LAB_PAUS
+      RTS
+.endif
+
 ; ctrl-c check routine. includes limited "life" byte save for INGET routine
 ; now also the code that checks to see if an interrupt has occurred
 
@@ -7786,6 +7807,15 @@ CTRLC
 
       JSR   V_INPT            ; scan input device
       BCC   LAB_FBA0          ; exit if buffer empty
+
+.ifdef APPLE2
+      ; note that if CTRL-C is inhibited, so is CTRL-S
+      CMP   #$13              ; [CTRL-S]
+      BNE   :+
+      JSR   LAB_PAUS          ; wait for keypress
+      BCS   LAB_FBA0          ; eat returned keystroke from PAUSE
+:
+.endif
 
       STA   ccbyte            ; save received byte
       LDX   #$20              ; "life" timer for bytes
@@ -8700,8 +8730,8 @@ LAB_2A9C = LAB_2A9B+1
 LAB_LTBL
       .word LAB_OMER-1        ; reserved, print out of memory error
 .ifdef APPLE2
-      .word LAB_OMER-1        ; SCREEN
-      .word LAB_OMER-1        ; CLS
+      .word LAB_XCER-1        ; SCREEN
+      .word LAB_XCER-1        ; CLS
 .endif
 .endif
 
@@ -8755,7 +8785,20 @@ LAB_CTBL
       .word LAB_NMI-1         ; NMI             new command
 .endif
 .ifdef APPLE2
+      .word LAB_XCER-1        ; HOME
       .word LAB_BYE-1         ; BYE             back to ProDOS
+      .word LAB_XCER-1        ; INVERSE
+      .word LAB_XCER-1        ; NORMAL
+      .word LAB_XCER-1        ; PR#
+      .word LAB_XCER-1        ; IN#
+      .word LAB_XCER-1        ; PREFIX
+      .word LAB_XCER-1        ; CAT
+      .word LAB_XCER-1        ; OPEN
+      .word LAB_XCER-1        ; CLOSE
+      .word LAB_XCER-1        ; WRITE
+      .word LAB_XCER-1        ; SEEK
+      .word LAB_XCER-1        ; CREATE
+      .word LAB_XCER-1        ; DELETE
 .endif
 
 ; function pre process routine table
@@ -8797,6 +8840,12 @@ LAB_FTPM    = LAB_FTPL+$01
       .word LAB_LRMS-1        ; LEFT$()   process string expression
       .word LAB_LRMS-1        ; RIGHT$()        "
       .word LAB_LRMS-1        ; MID$()          "
+      .word $0000             ; GLOBAL()
+      .word $0000             ; PDL()
+      .word $0000             ; BTN()
+      .word $0000             ; TELL()
+      .word $0000             ; SCRN()
+      .word $0000             ; HSCRN()
 
 ; action addresses for functions
 
@@ -8837,6 +8886,12 @@ LAB_FTBM    = LAB_FTBL+$01
       .word LAB_LEFT-1        ; LEFT$()
       .word LAB_RIGHT-1       ; RIGHT$()
       .word LAB_MIDS-1        ; MID$()
+      .word LAB_XCER-1        ; GLOBAL()
+      .word LAB_XCER-1        ; PDL()
+      .word LAB_XCER-1        ; BTN()
+      .word LAB_XCER-1        ; TELL()
+      .word LAB_XCER-1        ; SCRN()
+      .word LAB_XCER-1        ; HSCRN()
 
 ; hierarchy and action addresses for operator
 
@@ -8987,6 +9042,8 @@ LBB_BITTST
       .byte "ITTST(",TK_BITTST
                               ; BITTST(
 .ifdef APPLE2
+LBB_BTN
+      .byte "TN(",TK_BTN      ; BTN(
 LBB_BYE
       .byte "YE",TK_BYE       ; BYE
 .endif
@@ -9000,14 +9057,26 @@ LBB_CLS
 .endif
 LBB_CALL
       .byte "ALL",TK_CALL     ; CALL
+.ifdef APPLE2
+LBB_CAT
+      .byte "AT",TK_CAT       ; CAT
+.endif
 LBB_CHRS
       .byte "HR$(",TK_CHRS    ; CHR$(
 LBB_CLEAR
       .byte "LEAR",TK_CLEAR   ; CLEAR
+.ifdef APPLE2
+LBB_CLOSE
+      .byte "LOSE",TK_CLOSE   ; CLOSE
+.endif
 LBB_CONT
       .byte "ONT",TK_CONT     ; CONT
 LBB_COS
       .byte "OS(",TK_COS      ; COS(
+.ifdef APPLE2
+LBB_CREATE
+      .byte "REATE",TK_CREATE ; CREATE
+.endif
       .byte $00
 TAB_ASCD
 LBB_DATA
@@ -9016,6 +9085,10 @@ LBB_DEC
       .byte "EC",TK_DEC       ; DEC
 LBB_DEEK
       .byte "EEK(",TK_DEEK    ; DEEK(
+.ifdef APPLE2
+LBB_DELETE
+      .byte "ELETE",TK_DELETE ; DELETE
+.endif
 LBB_DEF
       .byte "EF",TK_DEF       ; DEF
 LBB_DIM
@@ -9036,6 +9109,10 @@ LBB_EXP
       .byte "XP(",TK_EXP      ; EXP(
       .byte $00
 TAB_ASCF
+.ifdef APPLE2
+LBB_FLUSH
+      .byte "LUSH",TK_FLUSH   ; FLUSH
+.endif
 LBB_FN
       .byte "N",TK_FN         ; FN
 LBB_FOR
@@ -9046,6 +9123,10 @@ LBB_FRE
 TAB_ASCG
 LBB_GET
       .byte "ET",TK_GET       ; GET
+.ifdef APPLE2
+LBB_GLOBAL
+      .byte "LOBAL(",TK_GLOBAL ; GLOBAL
+.endif
 LBB_GOSUB
       .byte "OSUB",TK_GOSUB   ; GOSUB
 LBB_GOTO
@@ -9054,6 +9135,12 @@ LBB_GOTO
 TAB_ASCH
 LBB_HEXS
       .byte "EX$(",TK_HEXS    ; HEX$(
+.ifdef APPLE2
+LBB_HOME
+      .byte "OME",TK_HOME     ; HOME
+LBB_HSCRN
+      .byte "SCRN(",TK_HSCRN  ; HSCRN(
+.endif
       .byte $00
 TAB_ASCI
 LBB_IF
@@ -9064,6 +9151,12 @@ LBB_INPUT
       .byte "NPUT",TK_INPUT   ; INPUT
 LBB_INT
       .byte "NT(",TK_INT      ; INT(
+.ifdef APPLE2
+LBB_INVERSE
+      .byte "NVERSE",TK_INVERSE ; INVERSE
+LBB_IN
+      .byte "N#",TK_IN        ; IN#
+.endif
 .ifndef NO_INT
 LBB_IRQ
       .byte "RQ",TK_IRQ       ; IRQ
@@ -9107,6 +9200,10 @@ LBB_NMI
 .endif
 LBB_NOT
       .byte "OT",TK_NOT       ; NOT
+.ifdef APPLE2
+LBB_NORMAL
+      .byte "ORMAL",TK_NORMAL ; NORMAL
+.endif
 LBB_NULL
       .byte "ULL",TK_NULL     ; NULL
       .byte $00
@@ -9115,10 +9212,18 @@ LBB_OFF
       .byte "FF",TK_OFF       ; OFF
 LBB_ON
       .byte "N",TK_ON         ; ON
+.ifdef APPLE2
+LBB_OPEN
+      .byte "PEN",TK_OPEN     ; OPEN
+.endif
 LBB_OR
       .byte "R",TK_OR         ; OR
       .byte $00
 TAB_ASCP
+.ifdef APPLE2
+LBB_PDL
+      .byte "DL(",TK_PDL      ; PDL(
+.endif
 LBB_PEEK
       .byte "EEK(",TK_PEEK    ; PEEK(
 LBB_PI
@@ -9127,8 +9232,16 @@ LBB_POKE
       .byte "OKE",TK_POKE     ; POKE
 LBB_POS
       .byte "OS(",TK_POS      ; POS(
+.ifdef APPLE2
+LBB_PREFIX
+      .byte "REFIX",TK_PREFIX ; PREFIX
+.endif
 LBB_PRINT
       .byte "RINT",TK_PRINT   ; PRINT
+.ifdef APPLE2
+LBB_PR
+      .byte "R#",TK_PR        ; PR#
+.endif
       .byte $00
 TAB_ASCR
 LBB_READ
@@ -9165,6 +9278,12 @@ LBB_SADD
       .byte "ADD(",TK_SADD    ; SADD(
 LBB_SAVE
       .byte "AVE",TK_SAVE     ; SAVE
+.ifdef APPLE2
+LBB_SCRN
+      .byte "CRN(",TK_SCRN    ; SCRN(
+LBB_SEEK
+      .byte "EEK",TK_SEEK     ; SEEK
+.endif
 LBB_SGN
       .byte "GN(",TK_SGN      ; SGN(
 LBB_SIN
@@ -9187,6 +9306,10 @@ LBB_TAB
       .byte "AB(",TK_TAB      ; TAB(
 LBB_TAN
       .byte "AN(",TK_TAN      ; TAN(
+.ifdef APPLE2
+LBB_TELL
+      .byte "ELL(",TK_TELL    ; TELL(
+.endif
 LBB_THEN
       .byte "HEN",TK_THEN     ; THEN
 LBB_TO
@@ -9216,6 +9339,10 @@ LBB_WHILE
       .byte "HILE",TK_WHILE   ; WHILE
 LBB_WIDTH
       .byte "IDTH",TK_WIDTH   ; WIDTH
+.ifdef APPLE2
+LBB_WRITE
+      .byte "RITE",TK_WRITE   ; WRITE
+.endif
       .byte $00
 TAB_POWR
       .byte TK_POWER,$00      ; ^
@@ -9332,8 +9459,36 @@ LAB_KEYT
       .word LBB_NMI           ; NMI
 .endif
 .ifdef APPLE2
+      .byte 4,'H'
+      .word LBB_HOME          ; HOME
       .byte 3,'B'
       .word LBB_BYE           ; BYE
+      .byte 7,'I'
+      .word LBB_INVERSE       ; INVERSE
+      .byte 6,'N'
+      .word LBB_NORMAL        ; NORMAL
+      .byte 3,'P'
+      .word LBB_PR            ; PR#
+      .byte 3,'I'
+      .word LBB_IN            ; IN#
+      .byte 6,'P'
+      .word LBB_PREFIX        ; PREFIX
+      .byte 3,'C'
+      .word LBB_CAT           ; CAT
+      .byte 4,'O'
+      .word LBB_OPEN          ; OPEN
+      .byte 5,'C'
+      .word LBB_CLOSE         ; CLOSE
+      .byte 5,'W'
+      .word LBB_WRITE         ; WRITE
+      .byte 4,'S'
+      .word LBB_SEEK          ; SEEK
+      .byte 6,'C'
+      .word LBB_CREATE        ; CREATE
+      .byte 6,'D'
+      .word LBB_DELETE        ; DELETE
+      .byte 5,'F'
+      .word LBB_FLUSH         ; FLUSH
 .endif
 
 ; secondary commands (can't start a statement)
@@ -9462,6 +9617,18 @@ LAB_KEYT
       .word LBB_RIGHTS        ; RIGHT$
       .byte 5,'M'             ;
       .word LBB_MIDS          ; MID$
+.ifdef APPLE2
+      .byte 7,'G'
+      .word LBB_GLOBAL        ; GLOBAL
+      .byte 4,'P'
+      .word LBB_PDL           ; PDL
+      .byte 4,'B'
+      .word LBB_BTN           ; BTN
+      .byte 4,'T'
+      .word LBB_TELL          ; TELL
+      .byte 6,'H'
+      .word LBB_HSCRN         ; HSCRN
+.endif
 
 ; BASIC messages, mostly error messages
 
@@ -9524,11 +9691,9 @@ ERR_ST      .byte "String too complex",$00
 ERR_CN      .byte "Can't continue",$00
 ERR_UF      .byte "Undefined function",$00
 ERR_LD      .byte "LOOP without DO",$00
-ERR_XC      .byte "Unimplemented",$00
+ERR_XC      .byte "Unimpl'd feature",$00
 ERR_IA      .byte "Illegal argument",$00
-ERR_P8_IO   ; dual-purpose
 ERR_IO      .byte "I/O error",$00
-ERR_P8_ND   ; dual-purpose
 ERR_ND      .byte "No device connected",$00
 ERR_P8      .byte "ProDOS",$00
 .else

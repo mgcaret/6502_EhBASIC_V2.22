@@ -1,11 +1,13 @@
-APPLE2 = 1
-NO_INT = 1
-LOW_TOKENS = 1
+APPLE2 = 1                      ; enable Apple II mods
+NO_INT = 1                      ; disable interrupt handling
+LOW_TOKENS = 1                  ; enable tokens 1-31
+; APPLE2_128K = 1               ; enable 128K Apple II
 
 ; Version of Apple ][ Port
 VERSION = $01
 
-NUM_FILE_BUFS = 3   ; default # of 1K buffers to reserve below memory
+NUM_FILE_BUFS = 2   ; default # of 1K buffers to reserve below memory
+                    ; one more will be added for whatever we need to do
 
 .feature labels_without_colons
 
