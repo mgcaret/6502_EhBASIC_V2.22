@@ -338,12 +338,13 @@ Decssp1           = Decss+1   ; number to decimal string start
 
 .ifdef LOW_TOKENS
 ; low primary command tokens (can start a statement)
-TK_RES00          = $00             ; reserved
+TK_RES00          = $00             ; reserved - DO NOT USE
 
 .ifdef APPLE2
 TK_SCREEN         = TK_RES00+1      ; SCREEN token
 TK_CLS            = TK_SCREEN+1     ; CLS token
-TK_GR             = TK_CLS+1        ; GR
+TK_TEXT           = TK_CLS+1        ; TEXT
+TK_GR             = TK_TEXT+1       ; GR
 TK_COLOR          = TK_GR+1         ; COLOR=
 TK_PLOT           = TK_COLOR+1      ; PLOT
 TK_HLIN           = TK_PLOT+1       ; HLIN
@@ -351,10 +352,10 @@ TK_VLIN           = TK_HLIN+1       ; VLIN
 TK_HGR            = TK_VLIN+1       ; HGR & HGR 2
 TK_HCOLOR         = TK_HGR+1        ; HCOLOR=
 TK_HPLOT          = TK_HCOLOR+1     ; HPLOT
-TK_
+TK_SYS            = TK_HPLOT+1      ; SYS (call with register load/save)
 .endif
 
-.out .sprintf("Low tokens enabled, highest #: %x",TK_CLS)
+.out .sprintf("Low tokens enabled, highest #: %x",TK_SYS)
 .endif
 
 ; primary command tokens (can start a statement)
@@ -500,6 +501,7 @@ TK_LEFTS          = TK_VPTR+1       ; LEFT$ token
 TK_RIGHTS         = TK_LEFTS+1      ; RIGHT$ token
 TK_MIDS           = TK_RIGHTS+1     ; MID$ token
 .ifdef APPLE2
+TK_USING          = TK_MIDS+1       ; USING$ token
 TK_GLOBAL         = TK_MIDS+1       ; GLOBAL token
 TK_PDL            = TK_GLOBAL+1     ; PDL token
 TK_BTN            = TK_PDL+1        ; BTN token
@@ -886,8 +888,7 @@ TabLoop
       LDX   #des_sk           ; descriptor stack start
       STX   next_s            ; set descriptor stack pointer
 .ifdef APPLE2
-      LDA   #$0C              ; CTRL-L
-      JSR   V_OUTP            ; clear screen
+      JSR   LAB_HOME          ; clear screen, home cursor
 .else
       JSR   LAB_CRLF          ; print CR/LF
 .endif 
@@ -8304,6 +8305,9 @@ LAB_TWOPI
 
 .ifdef APPLE2
 ; Apple II Additional Command implementation
+LAB_HOME
+      LDA   #$0C              ; CTRL-L
+      JMP   V_OUTP            ; clear screen
 
 LAB_BYE
       JSR   P8_MLI
@@ -8317,6 +8321,20 @@ BYEPARMS
       .byte 0
       .addr 0
 .endif
+
+LAB_INVERSE
+      PHY
+      JSR   F8_SETINV
+      PLY
+      RTS
+      
+LAB_NORMAL
+      PHY
+      JSR   F8_SETNORM
+      PLY
+      RTS
+      
+
 
 
 
@@ -8785,10 +8803,10 @@ LAB_CTBL
       .word LAB_NMI-1         ; NMI             new command
 .endif
 .ifdef APPLE2
-      .word LAB_XCER-1        ; HOME
+      .word LAB_HOME-1        ; HOME
       .word LAB_BYE-1         ; BYE             back to ProDOS
-      .word LAB_XCER-1        ; INVERSE
-      .word LAB_XCER-1        ; NORMAL
+      .word LAB_INVERSE-1     ; INVERSE
+      .word LAB_NORMAL-1      ; NORMAL
       .word LAB_XCER-1        ; PR#
       .word LAB_XCER-1        ; IN#
       .word LAB_XCER-1        ; PREFIX
@@ -8840,6 +8858,7 @@ LAB_FTPM    = LAB_FTPL+$01
       .word LAB_LRMS-1        ; LEFT$()   process string expression
       .word LAB_LRMS-1        ; RIGHT$()        "
       .word LAB_LRMS-1        ; MID$()          "
+      .word $0000             ; USING$()
       .word $0000             ; GLOBAL()
       .word $0000             ; PDL()
       .word $0000             ; BTN()
@@ -8886,6 +8905,7 @@ LAB_FTBM    = LAB_FTBL+$01
       .word LAB_LEFT-1        ; LEFT$()
       .word LAB_RIGHT-1       ; RIGHT$()
       .word LAB_MIDS-1        ; MID$()
+      .word LAB_XCER-1        ; USING$()
       .word LAB_XCER-1        ; GLOBAL()
       .word LAB_XCER-1        ; PDL()
       .word LAB_XCER-1        ; BTN()
@@ -9323,6 +9343,10 @@ LBB_UCASES
                               ; UCASE$(
 LBB_UNTIL
       .byte "NTIL",TK_UNTIL   ; UNTIL
+.ifdef APPLE2
+LBB_USING
+      .byte "SING$(",TK_USING ; USING
+.endif
 LBB_USR
       .byte "SR(",TK_USR      ; USR(
       .byte $00
@@ -9618,6 +9642,8 @@ LAB_KEYT
       .byte 5,'M'             ;
       .word LBB_MIDS          ; MID$
 .ifdef APPLE2
+      .byte 7,'U'
+      .word LBB_USING         ; USING$
       .byte 7,'G'
       .word LBB_GLOBAL        ; GLOBAL
       .byte 4,'P'

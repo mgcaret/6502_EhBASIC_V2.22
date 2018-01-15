@@ -26,6 +26,15 @@ P8_KVERSION   = P8_GLOBAL+$FF   ; ProDOS version
 
 ; Firmware equates
 ; U=undefined, V=a defined value, see docs
+F8_PLOT       = $F800   ; O:A=U,XY=XY     I:Y,A = XY coordinates
+F8_PLOT1      = $F80E   ; O:A=U,XY=XY     I:Y=X coord, (ZP_GBASL) = row pointer
+F8_HLINE      = $F819   ; O:AY=U,X=X      I:Y,A = XY start, ZP_H2 = end col
+F8_VLINE      = $F828   ; O:AY=U,X=X      I:Y,A = XY start, ZP_H2 = end row
+F8_CLRSCR     = $F832   ; O:AY=U,X=X      clear GR screen
+F8_CLRTOP     = $F836   ; O:AY=U,X=X      clr GR screen, mixed mode
+F8_GBASCALC   = $F847   ; O:A=V,XY=XY     A=rownum.  calculate (ZP_GBASL)
+
+; text, keyboard
 F8_INIT       = $FB2F   ; O:A=V,XY=U
 F8_HOME       = $FC58   ; O:AY=U,X=X
 F8_CLREOL     = $FC9C   ; O:AY=U,X=X
@@ -40,6 +49,10 @@ F8_SETVID     = $FE93   ; O:AXY=U
 F8_MONITOR    = $FF69   ; doesn't return
 
 ; Page 0 equates (not EhBASIC)
+; NOTE EhBASIC uses $00-$13, $5B-$DB
+; and with interrupt support, $DC-$E1
+
+; Text & monitor stuff
 ZP_WNDLFT     = $20     ; window left
 ZP_WNDWDTH    = $21     ; window width
 ZP_WNDTOP     = $22     ; window top
@@ -57,6 +70,26 @@ ZP_KSWL       = $38     ; Monitor keyboard vector
 ZP_KSWH       = $39
 ZP_RNDL       = $4E     ; updated by KEYIN
 ZP_RNDH       = $4F     ; updated by KEYIN
+
+; Graphics stuff
+; $1A-$1B - Shape Pointer for DRAW
+; $1C     - Last COLOR Used
+ZP_GBASL      = $26
+ZP_GBASH      = $27
+ZP_H2         = $2C     ; Lo-Res HLIN Endpoint
+ZP_V2         = $2D     ; Lo-Res VLIN Endpoint
+ZP_MASK       = $2E
+ZP_COLOR      = $30     ; Lo-res COLOR Value * 17
+; $32     - Text Mask ($FF = Normal, $7F = Inverse, $3F = Flashing)
+;$E0-$E1 - Horizontal Coordinate of HPLOT
+;$E2     - Vertical Coordinate of HPLOT
+;$E3     - Free Space
+;$E4     - HCOLOR Value (0=0, 1=42, 2=85, 3=127, 4=128, 5=170, 6=213, 7=255)
+;$E6     - High Byte of Address of First Byte of Where HGR is Plotted
+;$E7     - SCALE Value (0 = 256)
+;$E8-$E9 - Address of Shape Table
+;$EA     - DRAW/XDRAW Collision Count
+
 
 ; Page 3 equates
 SOFTEV        = $3F2
