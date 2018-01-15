@@ -59,6 +59,7 @@ ZP_WNDTOP     = $22     ; window top
 ZP_WNDBTM     = $23     ; window bottom
 ZP_CH         = $24     ; cursor horizontal
 ZP_CV         = $25     ; cursor vertical
+ZP_TXTMASK    = $32     ; $FF = Normal, $7F = Inverse, $3F = Flashing
 ZP_A1         = $3C     ; monitor addresses
 ZP_A2         = $3E
 ZP_A4         = $42

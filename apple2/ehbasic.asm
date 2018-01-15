@@ -1428,7 +1428,8 @@ LAB_1359
       LDA   #'\'
       JSR   LAB_PRNA
       JSR   LAB_CRLF
-      JSR   LAB_1357
+      JMP   LAB_1357
+:
 .endif
 
       CPX   #$00              ; compare pointer with $00
@@ -8329,16 +8330,16 @@ BYEPARMS
 .endif
 
 LAB_INVERSE
-      PHY
-      JSR   F8_SETINV
-      PLY
+      PHA
+      LDA   #$7F
+INVST STA   ZP_TXTMASK
+      PLA
       RTS
       
 LAB_NORMAL
       PHY
-      JSR   F8_SETNORM
-      PLY
-      RTS
+      LDA   #$FF
+      BNE   INVST
       
 
 
@@ -8455,8 +8456,8 @@ DO_VEC_IN
       JMP   (IO_IN_PREAD)
 
 ; *************************************
-; Apple II 40-col screen and built-in keyboard Pascal 1.1
-; I/O routines
+; Apple II 40-col screen and built-in keyboard
+; Pascal 1.1-ish I/O routines
 ; *************************************
 
 A2_STDIO_PINIT
@@ -8479,7 +8480,7 @@ A2_STDIO_PREAD
 :     rts
 
 A2_STDIO_PWRITE
-      tax
+      tax                     ; save it
       cmp   #$0D              ; CR
       bne   :+
       jsr   F8_CLREOL         ; does not change x
@@ -8489,12 +8490,33 @@ A2_STDIO_PWRITE
       JSR   F8_HOME           ; does not change x
       txa
       bra   A2_PW_DN          ; and skip actual output
+:     cmp   #' '              ; always do ctrl chars the normal way
+      bcc   :+
+      bit   ZP_TXTMASK        ; check inverse
+      bpl   A2_PW_INV
 :     eor   #$80              ; make apple II char
       jsr   F8_COUT1          ; write to screen, preserves a
       eor   #$80              ; back to EhBASIC char
 A2_PW_DN
-      ldx   #$00
+      ldx   #$00              ; pascal firmware error code
       rts
+A2_PW_INV
+      lda   ZP_TXTMASK        ; current char output mask
+      pha
+      lda   #$ff
+      sta   ZP_TXTMASK        ; tell COUT1 not to mess with it
+      txa                     ; get our char back
+      cmp   #'`'              ; lower-case-ish?
+      bcs   :+                ; don't munge it
+      cmp   #'@'              ; digit-ish?
+      bcc   :+                ; don't munge those, either
+      sbc   #$40              ; munge anything else (carry is pre-set)
+:     jsr   F8_COUT1          ; preserves all registers
+      pla                     ; old mask
+      sta   ZP_TXTMASK        ; put it back
+      txa                     ; get unmunged char back
+      bra   A2_PW_DN          ; finish up
+      
 
 A2_STDIO_PSTATUS
       ora   #$00              ; set flags
