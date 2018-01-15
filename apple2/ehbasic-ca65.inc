@@ -99,6 +99,7 @@ CTRL_Y        = $3F8
 ; Hardware equates
 KBD           = $C000
 KBD_STROBE    = $C010
+SETALTCHAR    = $C00F
 
 ; value equates
 MAGIC_A5      = $A5

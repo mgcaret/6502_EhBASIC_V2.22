@@ -675,10 +675,11 @@ LDR_START
       ldx   #$00
 :     lda   __global_LOAD__,x
       sta   __global_RUN__,x
-      dex
+      inx
       bne   :-
 ; I/O initialization
       jsr   LDR_IOINIT        ; init basic I/O
+      sta   SETALTCHAR
 ; now scan slots for Pascal 1.1 firmware cards
       stz   $00
       lda   #$C8              ; slot 7+1
@@ -1422,7 +1423,12 @@ LAB_1359
       CPX   Temp3             ; check input length against most entered
       BCS   LAB_1359          ; nope, ignore it
       LDA   Ibuffs,X          ; get next char in input buffer
-:
+:     CMP   #$18              ; ctrl-x - cancel line
+      BNE   :+
+      LDA   #'\'
+      JSR   LAB_PRNA
+      JSR   LAB_CRLF
+      JSR   LAB_1357
 .endif
 
       CPX   #$00              ; compare pointer with $00
