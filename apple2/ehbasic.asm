@@ -56,8 +56,16 @@
 ;               so they could be called from the main bank.  Strategy might be
 ;               to ifdef K128 and pushseg/segment/popseg the original code
 ;               and a way to get to it from there.
-
-
+;             - Basic strategy for 128K version:
+;               * All program and data in Aux mem from $0C00-$BFFF (46080 bytes)
+;               * Main interpreter code in Aux LC from $D000-$FEFF
+;               * Stub interrupt handlers in $FF00 page, switch to standard
+;                 config and call standard handlers.
+;               * Use extra space in main RAM to support text/gr/dbl-lo-res
+;                 page 2 and non-DHGR graphics with no conflicts.  Support DHGR
+;                 graphics with caveats that applied to 64K version.
+;               * Provide faster graphics routines using look-up tables and
+;                 other optimizations.
 
 
 ; zero page use ..
@@ -9158,6 +9166,8 @@ LBB_EXP
       .byte $00
 TAB_ASCF
 .ifdef APPLE2
+LBB_FLASH ; *alias*
+      .byte "LASH",TK_INVERSE ; FLASH - alias of INVERSE
 LBB_FLUSH
       .byte "LUSH",TK_FLUSH   ; FLUSH
 .endif
