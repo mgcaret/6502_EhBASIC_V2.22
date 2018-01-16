@@ -6,9 +6,6 @@ LOW_TOKENS = 1                  ; enable tokens 1-31
 ; Version of Apple ][ Port
 VERSION = $01
 
-NUM_FILE_BUFS = 2   ; default # of 1K buffers to reserve below memory
-                    ; one more will be added for whatever we need to do
-
 .feature labels_without_colons
 
 ; ProDOS equates

@@ -268,6 +268,9 @@ FAC2_1            = FAC2_e+1  ; FAC2 mantissa1
 FAC2_2            = FAC2_e+2  ; FAC2 mantissa2
 FAC2_3            = FAC2_e+3  ; FAC2 mantissa3
 FAC2_s            = FAC2_e+4  ; FAC2 sign (b7)
+.ifdef APPLE2
+OSptr             = FAC2_1
+.endif
 
 FAC_sc            = $B8       ; FAC sign comparison, Acc#1 vs #2
 FAC1_r            = $B9       ; FAC1 rounding byte
@@ -360,7 +363,11 @@ TK_VLIN           = TK_HLIN+1       ; VLIN
 TK_HGR            = TK_VLIN+1       ; HGR & HGR 2
 TK_HCOLOR         = TK_HGR+1        ; HCOLOR=
 TK_HPLOT          = TK_HCOLOR+1     ; HPLOT
-TK_SYS            = TK_HPLOT+1      ; SYS (call with register load/save)
+TK_CHTYPE         = TK_HPLOT+1      ; CHTYPE
+TK_LOCK           = TK_CHTYPE+1     ; LOCK
+TK_UNLOCK         = TK_LOCK+1       ; UNLOCK
+TK_ERROR          = TK_UNLOCK+1     ; ERROR
+TK_SYS            = TK_ERROR+1      ; SYS (call with register load/save)
 .endif
 
 .out .sprintf("Low tokens enabled, highest #: %x",TK_SYS)
@@ -454,10 +461,17 @@ TK_STEP           = TK_NOT+1        ; STEP token
 TK_UNTIL          = TK_STEP+1       ; UNTIL token
 TK_WHILE          = TK_UNTIL+1      ; WHILE token
 TK_OFF            = TK_WHILE+1      ; OFF token
+.ifdef APPLE2
+TK_AT             = TK_OFF+1        ; AT token
+; operator tokens
+
+TK_PLUS           = TK_AT+1         ; + token
+.else
 
 ; opperator tokens
 
 TK_PLUS           = TK_OFF+1        ; + token
+.endif
 TK_MINUS          = TK_PLUS+1       ; - token
 TK_MUL            = TK_MINUS+1      ; * token
 TK_DIV            = TK_MUL+1        ; / token
@@ -515,7 +529,8 @@ TK_PDL            = TK_GLOBAL+1     ; PDL token
 TK_BTN            = TK_PDL+1        ; BTN token
 TK_TELL           = TK_BTN+1        ; TELL token
 TK_SCRN           = TK_TELL+1       ; SCRN token
-TK_HSCRN          = TK_SCRN+1       ; HSCRN token
+TK_ERRNO          = TK_SCRN+1       ; ERRNO token
+TK_HSCRN          = TK_ERRNO+1      ; HSCRN token
 
 .out .sprintf("Highest token #: %x",TK_HSCRN)
 .endif
@@ -536,16 +551,24 @@ LAB_SKFF          = LAB_STAK+$FF
 .ifdef APPLE2
 .pushseg
 .segment "global"
-; these will be initialized at cold start of interp
 GLOBAL_PAGE = *
+INTERP_VER        .byte $01   ; VERSION
+; these will be initialized at cold start of interp, starting at ccflag
+; so make sure these are in order
 ccflag            .byte $00   ; see below
 ccbyte            .byte $00   ; see below
 ccnull            .byte $00   ; see below
 VEC_CC            .word $0000 ; see below
 ; other values follow, may be pre-initialized or initialized by loader
-FILE_BUFS         .byte NUM_FILE_BUFS   ; # of file buffers-1 (last one reserved)
-RAM_BASE          .word $800
-RAM_TOP           .word __interp_RUN__-((NUM_FILE_BUFS+1)*$400)  ; initial RAM TOP
+RAM_BASE          .word $0800
+ram_top_v =       __interp_RUN__-$500   ; reserve $500 bytes for our own use
+RAM_TOP           .word ram_top_v  ; initial RAM TOP
+RES_BUF           .word ram_top_v  ; reserved buffer for load, save, catalog, etc
+INPUT_BUF         .word ram_top_v+$400  ; used for I/O redir, keyboard buffer`
+INPUT_HEAD        .byte $00   ; head of INPUT_BUF, $00-$7F
+INPUT_TAIL        .byte $00   ; tail of INPUT_BUF, $00-$7F. TAIL==HEAD=Empty
+ASM_BUF           .word ram_top_v+$480  ; used for catalog, etc. to assemble data
+AUTO_RUN          .byte $00   ; auto-run flag, set by run "file"
 SYS_A             .byte $00   ; A register for SYS command
 SYS_X             .byte $00   ; X register for SYS command
 SYS_Y             .byte $00   ; Y register for SYS command
@@ -553,7 +576,10 @@ SYS_P             .byte $00   ; P register for sys command
 SYS_BANK          .byte $00   ; 0 = main bank, 1 = aux bank
 SYS_VEC           .word $0000 ; address of SYS called routine
 WS_VEC            jmp LDR_CALLBACK ; called every warm start
-
+; Error codes
+ERRNO_BASIC       .byte $00   ; last BASIC error code
+ERRNO_PASCAL_IO   .byte $00   ; last PASCAL I/O error code
+ERRNO_PRODOS      .byte $00   ; last PRODOS error code
 ; Active Pascal I/O vectors
 IO_PINIT          .addr A2_STDIO_PINIT    ; only used when initing
 IO_IN_PREAD       .addr A2_STDIO_PREAD
@@ -606,8 +632,47 @@ SL7_PINIT         .addr 0
 SL7_PREAD         .addr 0
 SL7_PWRITE        .addr 0
 SL7_PSTATUS       .addr 0
+; System buffer mgt, buffer 0 is always at RAM_TOP-$400, 2 at RAM_TOP-$800, ...
+; Values:  $00 = unallocated, $FF = Free, $01-$7F = owned by file
+; $80 = owned by GETBUF() function
+BUFFS             .byte 0       ; # of buffers in use
+BUFF0             .byte 0
+BUFF1             .byte 0
+BUFF2             .byte 0
+BUFF3             .byte 0
+BUFF4             .byte 0
+BUFF5             .byte 0
+BUFF6             .byte 0
+BUFF7             .byte 0
+; File mapping table, currently allows 8 BASIC files to be in use.
+FILE0B            .byte 0       ; BASIC file #, 0 = unassigned
+FILE1B            .byte 0       ; low bit set=ProDOS file
+FILE2B            .byte 0       ; high bit set=Pascal slot firmware
+FILE3B            .byte 0
+FILE4B            .byte 0
+FILE5B            .byte 0
+FILE6B            .byte 0
+FILE7B            .byte 0
+FILE0P            .byte 0       ; ProDOS file reference number or slot #
+FILE1P            .byte 0
+FILE2P            .byte 0
+FILE3P            .byte 0
+FILE4P            .byte 0
+FILE5P            .byte 0
+FILE6P            .byte 0
+FILE7P            .byte 0
+FILE0T            .byte 0       ; File type references
+FILE1T            .byte 0       ; for ProDOS these are $00 = file, $01=dir
+FILE2T            .byte 0
+FILE3T            .byte 0
+FILE4T            .byte 0
+FILE5T            .byte 0
+FILE6T            .byte 0
+FILE7T            .byte 0
 
 
+
+.out .sprintf("Last global: %x",*-GLOBAL_PAGE)
 .align 256
 .popseg
 .else
@@ -825,7 +890,7 @@ LDR_MEMTAB  ; 24 bytes
 .popseg
 
 .segment "interp"
-      ;.org  $8e00            ; change and uncomment for easier debugging
+      .org  $8e00            ; change and uncomment for easier debugging
 .else
       *=    $C000
 .endif
@@ -1181,6 +1246,10 @@ LAB_OMER
 ; do error #X, then warm start
 
 LAB_XERR
+.ifdef APPLE2
+      STZ   AUTO_RUN          ; prevent auto-run
+      STX   ERRNO_BASIC       ; save error number
+.endif
       JSR   LAB_CRLF          ; print CR/LF
 
       LDA   LAB_BAER,X        ; get error message pointer low byte
@@ -1188,6 +1257,32 @@ LAB_XERR
       JSR   LAB_18C3          ; print null terminated string from memory
 
       JSR   LAB_1491          ; flush stack and clear continue flag
+.ifdef APPLE2
+      JSR   P8_CloseAll
+      LDA   ERRNO_BASIC       ; get error back
+      CMP   #$30              ; is P8 error?
+      BNE   NOTP8ERR
+      LDX   #$00
+:     LDA   LAB_P8ER,x
+      BEQ   P8ERRNO          ; hit end of table
+      INX                    ; to pointer
+      CMP   ERRNO_PRODOS
+      BEQ   P8PERR
+      INX                     ; to next entry
+      INX
+      BNE   :-                ; always, unless end of table marker gone
+P8PERR
+      LDA   LAB_P8ER,x           ; low byte of error message
+      INX
+      LDY   LAB_P8ER,x           ; high byte of error message
+      JSR   LAB_18C3          ; print P8 error msg
+      BRA   NOTP8ERR          ; misnomer in this case
+P8ERRNO
+      LDX   ERRNO_PRODOS
+      LDA   #$00
+      JSR   LAB_295E          ; print P8 error #
+NOTP8ERR
+.endif      
       LDA   #<LAB_EMSG        ; point to " Error" low addr
       LDY   #>LAB_EMSG        ; point to " Error" high addr
 LAB_1269
@@ -1375,6 +1470,21 @@ LAB_1330
 
 
 LAB_133E
+.ifdef APPLE2
+      BIT   AUTO_RUN
+      BPL   :+
+      LDX   #$00
+      LDA   #TK_RUN
+      STA   Ibuffs,X          ; stuff a RUN token into the input buffer
+      TXA
+      INX
+      STA   Ibuffs,X
+      STA   AUTO_RUN          ; don't keep auto-running
+      LDX   #<Ibuffs
+      LDY   #>Ibuffs
+      JMP   LAB_1280          ; skip past input routine
+:
+.endif
       JMP   LAB_127D          ; else we just wait for Basic command, no "Ready"
 
 ; print "? " and get BASIC input
@@ -2297,6 +2407,15 @@ LAB_RUN
 ; does RUN n
 
 LAB_1696
+.ifdef APPLE2
+      CMP   #$30
+      BCC   RUN_FILE
+      CMP   #$40
+      BCC   RUN_LINE
+RUN_FILE
+      JMP   V_LOAD_AND_RUN
+RUN_LINE
+.endif
       JSR   LAB_147A          ; go do "CLEAR"
       BEQ   LAB_16B0          ; get n and do GOTO n (branch always as CLEAR sets Z=1)
 
@@ -3140,11 +3259,26 @@ LAB_INPUT
       LDA   #$3B              ; load A with ";"
       JSR   LAB_SCCA          ; scan for CHR$(A), else do syntax error then warm start
       JSR   LAB_18C6          ; print string from Sutill/Sutilh
-
+.ifdef APPLE2
+      ; do Applesoft-style prompting, no ? when prompt string present
+      LDA   #$00              ; set z flag
+.endif
                               ; done with prompt, now get data
 LAB_1934
+.ifdef APPLE2
+      PHP
+      JSR   LAB_CKRN          ; check not Direct, back here if ok
+      PLP
+      BNE   :+                ; do ? if no prompt string
+      JSR   LAB_1357          ; no ? prompt
+      BRA   :++     
+:
+      JSR   LAB_INLN          ; print "? " and get BASIC input
+:
+.else
       JSR   LAB_CKRN          ; check not Direct, back here if ok
       JSR   LAB_INLN          ; print "? " and get BASIC input
+.endif
       LDA   #$00              ; set mode = INPUT
       CMP   Ibuffs            ; test first byte in buffer
       BNE   LAB_1953          ; branch if not null input
@@ -8369,6 +8503,7 @@ V_INPT
       JSR   DO_VEC_IN         ; get waiting char
       CPX   #$00              ; carry is set
       BEQ   :+                ; if no error
+      STX   ERRNO_PASCAL_IO   ; save error number
       CLC                     ; clear carry on error
 :     PLY
       PLX
@@ -8423,7 +8558,10 @@ V_OUTP
       ; Line above commented, do the output anyway
 DO_OUT:
       JSR   DO_VEC_OUT        ; write it
-      CMP   #$0C              ; was form feed?
+      CPX   #$01
+      BCS   :+
+      STX   ERRNO_PASCAL_IO
+:     CMP   #$0C              ; was form feed?
       BNE   :+
       LDA   #$0D              ; lie and say it was a CR
 :     PLY
@@ -8543,13 +8681,241 @@ V_RESET
       JSR   A2_STDIO_PINIT
       JMP   LAB_WARM
 
-; *************************************        
-      
+; *************************************    
+
+; Current file format:
+; TYPE: $F8, aux $EBA0 (for program, $EBAx in general)
+
+; Future file format:
+; will save with the above type/aux type, plus the below header
+; load will load any file that has the below header
+; $00: A0                       ; magic #1
+; $01: EB                       ; magic #2
+; $02: version saved under
+; $03: minimum version needed to run
+; $04-$05: start addr of program when it was saved
+; $06-$0F: reserved
+; $10+: Program data
+
+; this entry is used by run <string>
+V_LOAD_AND_RUN
+      lda   #$80
+      sta   AUTO_RUN
 V_LOAD
-      BRK
-      
+      lda   #$ff              ; do load
+      jsr   LDSV              ; execute load/save
+      bit   AUTO_RUN
+      bmi   :+                ; no message if we will auto-run
+      lda   #<LAB_RMSG        ; Ready message
+      ldy   #>LAB_RMSG
+      jsr   LAB_18C3          ; print it
+:     jmp   LAB_1319          ; re-link program, clear vars
 V_SAVE
-      BRK
+      lda   #$00
+LDSV
+      pha
+      jsr   LAB_EVEX          ; evaluate string
+      jsr   LAB_EVST          ; a string?  YX=ptr, A=length
+      cmp   #$7f              ; length OK?
+      bcc   :+
+      pla                     ; clean stack, maybe not needed
+      ldx   #$1c              ; "string too long"
+      jmp   LAB_XERR          ; error out
+:     sta   PathBuf           ; save length
+      sty   OSptr+1           ; save address on zpage
+      stx   OSptr
+      tay                     ; now copy string to path buffer
+:     lda   (OSptr),y
+      jsr   K_2UPPER          ; prodos paths in upper case
+      sta   PathBuf+1,y
+      dey
+      bpl   :-
+      jsr   P8_Get_File_Info
+      bcc   LDSV_FIEX         ; file exists... go to next step
+      pla                     ; get operation
+      beq   :+                ; save, don't check for FNF
+      lda   #$46              ; restore file not found error code
+      jmp   P8_DoError        ; was load, FNF is fatal
+:     pha                     ; for save, we have to create the file
+      lda   #$f8              ; file type
+      sta   PARM_Create+4
+      lda   #$a0              ; aux type low
+      sta   PARM_Create+5
+      lda   #$eb              ; aux type high
+      sta   PARM_Create+6
+      lda   #$01              ; storage type ($1 = regular file)
+      sta   PARM_Create+7
+      jsr   P8_Get_Time       ; get time
+      ldx   #$03              ; copy date/time
+:     lda   $bf90,x
+      sta   PARM_Create+8,x
+      dex
+      bpl   :-
+      jsr   P8_Create
+      bcc   LDSV_OPEN         ; always (read code and convince yourself!)
+LDSV_FIEX
+      ; TODO: load opens any file, checks header
+      ;pla                     ; get op
+      ;pha
+      ;bne   LDSV_OPEN         ; if loading, we open all and look for magic
+      lda   PARM_File_Info+$4 ; get file type
+      cmp   #$f8              ; is ours?
+      beq   :+
+LDSV_FTMM
+      ldx   #$32              ; type mismatch
+      jmp   LAB_XERR
+:     lda   PARM_File_Info+$5
+      cmp   #$a0              ; program data
+      bne   LDSV_FTMM
+      lda   PARM_File_Info+$6
+      cmp   #$eb              ; EhBasic file
+      bne   LDSV_FTMM
+LDSV_OPEN
+      lda   RES_BUF
+      sta   PARM_Open+3
+      lda   RES_BUF+1
+      sta   PARM_Open+4
+      jsr   P8_Open
+      bcs   P8_DoError        ; FNF is fatal here
+      lda   PARM_Open+5       ; reference number
+      sta   PARM_ReadWrite+1
+      sta   PARM_Close+1
+      lda   Smeml             ; start read/write at start of memory
+      sta   PARM_ReadWrite+2
+      lda   Smemh
+      sta   PARM_ReadWrite+3
+      pla                     ; last time we look at op
+      beq   LDSV_WRITE
+      ; jsr   LAB_1463          ; execute "NEW"
+      lda   Ememl             ; begin reading
+      sec
+      sbc   Smeml             ; try to transfer max # of bytes
+      sta   PARM_ReadWrite+4
+      lda   Ememh
+      sbc   Smemh
+      sta   PARM_ReadWrite+5
+      jsr   P8_Read
+      lda   Smeml             ; now set Svarl/h accounting for actual prog size
+      adc   PARM_ReadWrite+6  ; carry is clear because no P8 error
+      sta   Svarl
+      lda   Smemh
+      adc   PARM_ReadWrite+7
+      sta   Svarh
+      bcc   LDSV_CLOSE        ; always, because we can't ever wrap past $FFFF
+LDSV_WRITE
+      lda   Svarl             ; begin writing
+      sec
+      sbc   Smeml             ; transfer from start of mem to start of vars
+      sta   PARM_ReadWrite+4
+      lda   Svarh
+      sbc   Smemh
+      sta   PARM_ReadWrite+5
+      jsr   P8_Write
+LDSV_CLOSE
+      jsr   P8_Close
+      rts
+      
+
+P8_CheckErrs
+      sta   ERRNO_PRODOS
+      bcs   P8_IsError
+:     rts
+P8_IsError
+      cmp   #$46              ; File Not Found
+      bcs   :-                ; let caller decide how to handle FnF
+P8_DoError
+      ldx   #$30              ; ERR_P8
+      jmp   LAB_XERR
+
+
+P8_Get_File_Info
+      jsr   P8_MLI
+      .byte $c4
+      .addr PARM_File_Info
+      bra   P8_CheckErrs
+
+P8_Get_Time
+      jsr   P8_MLI
+      .byte $82
+      .addr $0000             ; no parameter list
+      rts                     ; can't error, either
+      
+P8_Create
+      jsr   P8_MLI
+      .byte $C0
+      .addr PARM_Create
+      bra   P8_CheckErrs
+      
+P8_Open
+      jsr   P8_MLI
+      .byte $C8
+      .addr PARM_Open
+      bra   P8_CheckErrs
+      
+P8_Read
+      jsr   P8_MLI
+      .byte $CA
+      .addr PARM_ReadWrite
+      bra   P8_CheckErrs
+      
+P8_Write
+      jsr   P8_MLI
+      .byte $CB
+      .addr PARM_ReadWrite
+      bra   P8_CheckErrs
+
+P8_Close
+      jsr   P8_MLI
+      .byte $CC
+      .addr PARM_Close
+      bra   P8_CheckErrs
+      
+P8_CloseAll
+      stz   PARM_Close+1
+      jsr   P8_MLI
+      .byte $CC
+      .addr PARM_Close
+      rts
+
+PARM_File_Info
+      .byte $0a               ; Parm count
+      .addr PathBuf           ; pathname
+      .byte $00               ; access
+      .byte $00               ; file type
+      .word $0000             ; aux type
+      .byte $00               ; storage type
+      .word $0000             ; blocks used
+      .word $0000             ; mod date
+      .word $0000             ; mod time
+      .word $0000             ; create date
+      .word $0000             ; create time
+      
+PARM_Create
+      .byte $07               ; parm count
+      .addr PathBuf           ; pathname
+      .byte $c3               ; access
+      .byte $00               ; type
+      .word $0000             ; aux type
+      .byte $00               ; storage type
+      .word $0000             ; create date
+      .word $0000             ; create time
+      
+PARM_Open
+      .byte $03               ; parm count
+      .addr PathBuf           ; pathname
+      .addr $0000             ; I/O buffer address
+      .byte $00               ; reference number
+
+PARM_ReadWrite
+      .byte $04               ; parm count
+      .byte $00               ; ref num
+      .addr $0000             ; data buffer
+      .word $0000             ; request count
+      .word $0000             ; transfer count
+
+PARM_Close
+      .byte $01               ; Parm Count
+      .byte $00               ; Ref Num
 
 .else
 ; these are in RAM and are set by the monitor at start-up
@@ -8649,8 +9015,11 @@ StrTab
 .endif
 EndTab
 
+.ifdef APPLE2
+; not needed
 LAB_MSZM
       .byte $0D,$0A,"Memory size ",$00
+.endif
 
 LAB_SMSG
 .ifdef APPLE2
@@ -8900,6 +9269,7 @@ LAB_FTPM    = LAB_FTPL+$01
       .word $0000             ; BTN()
       .word $0000             ; TELL()
       .word $0000             ; SCRN()
+      .word $0000             ; ERRNO()
       .word $0000             ; HSCRN()
 
 ; action addresses for functions
@@ -8947,6 +9317,7 @@ LAB_FTBM    = LAB_FTBL+$01
       .word LAB_XCER-1        ; BTN()
       .word LAB_XCER-1        ; TELL()
       .word LAB_XCER-1        ; SCRN()
+      .word LAB_XCER-1        ; ERRNO()
       .word LAB_XCER-1        ; HSCRN()
 
 ; hierarchy and action addresses for operator
@@ -9086,6 +9457,10 @@ LBB_ASC
       .byte "SC(",TK_ASC      ; ASC(
 LBB_ATN
       .byte "TN(",TK_ATN      ; ATN(
+.ifdef APPLE2
+LBB_AT
+      .byte "T",TK_AT         ; AT
+.endif
       .byte $00
 TAB_ASCB
 LBB_BINS
@@ -9161,6 +9536,10 @@ LBB_END
       .byte "ND",TK_END       ; END
 LBB_EOR
       .byte "OR",TK_EOR       ; EOR
+.ifdef APPLE2
+LBB_ERRNO
+      .byte "RRNO(",TK_ERRNO  ; ERRNO(
+.endif
 LBB_EXP
       .byte "XP(",TK_EXP      ; EXP(
       .byte $00
@@ -9577,6 +9956,8 @@ LAB_KEYT
       .word LBB_WHILE         ; WHILE
       .byte 3,'O'
       .word LBB_OFF           ; OFF
+      .byte 2,'A'
+      .word LBB_AT            ; AT
 
 ; opperators
 
@@ -9690,6 +10071,8 @@ LAB_KEYT
       .word LBB_BTN           ; BTN
       .byte 4,'T'
       .word LBB_TELL          ; TELL
+      .byte 6,'E'
+      .word LBB_ERRNO         ; ERRNO
       .byte 6,'H'
       .word LBB_HSCRN         ; HSCRN
 .endif
@@ -9723,6 +10106,42 @@ LAB_BAER
       .word ERR_IO            ;$2C i/o error
       .word ERR_ND            ;$2E no device connected
       .word ERR_P8            ;$30 prodos
+      .word ERR_FT            ;$32 file type mismatch
+      
+LAB_P8ER                      ; ProDOS error table
+      .byte $27               ; I/O error
+      .addr ERR_IO            ; re-use
+      .byte $2B               ; Write protected
+      .addr P8E_WP
+      .byte $2E               ; disk switched
+      .addr P8E_DS
+      .byte $40               ; Bad path
+      .addr P8E_BP            ; in main error table to reuse syntax error
+      .byte $44               ; path not found
+      .addr P8E_FX
+      .byte $45               ; volume not found
+      .addr P8E_VX
+      .byte $46               ; file not found
+      .addr P8E_FX
+      .byte $47               ; duplicate file name
+      .addr P8E_DF
+      .byte $4B               ; wrong storage type
+      .addr P8E_ST
+      .byte $4E               ; access error
+      .addr P8E_AE
+      .byte $50               ; file is open
+      .addr P8E_FO
+      .byte $00               ; end of table
+      
+P8E_WP      .byte "write protected",$00
+P8E_DS      .byte "disk switched",$00
+P8E_FX      .byte "file/path not found",$00
+P8E_VX      .byte "volume not found",$00
+P8E_DF      .byte "duplicate file name",$00
+P8E_ST      .byte "wrong storage type",$00
+P8E_AE      .byte "no permission",$00
+P8E_FO      .byte "file open",$00
+
 .else
 ; I may implement these two errors to force definition of variables and
 ; dimensioning of arrays before use.
@@ -9738,6 +10157,7 @@ LAB_BAER
 ; made some of these smaller, added a few
 ; TODO: consider packing/compression
 ERR_NF      .byte "NEXT w/o FOR",$00
+P8E_BP      .byte "Path "
 ERR_SN      .byte "Syntax",$00
 ERR_RG      .byte "RETURN w/o GOSUB",$00
 ERR_OD      .byte "Out of DATA",$00
@@ -9749,6 +10169,7 @@ ERR_BS      .byte "Array bounds",$00
 ERR_DD      .byte "Double dimension",$00
 ERR_D0      .byte "Divide by zero",$00
 ERR_ID      .byte "Illegal direct",$00
+ERR_FT      .byte "File " ; roll into next message
 ERR_TM      .byte "Type mismatch",$00
 ERR_LS      .byte "String too long",$00
 ERR_ST      .byte "String too complex",$00
@@ -9759,7 +10180,7 @@ ERR_XC      .byte "Unimpl'd feature",$00
 ERR_IA      .byte "Illegal argument",$00
 ERR_IO      .byte "I/O error",$00
 ERR_ND      .byte "No device connected",$00
-ERR_P8      .byte "ProDOS",$00
+ERR_P8      .byte "ProDOS ",$00
 .else
 ERR_NF      .byte "NEXT without FOR",$00
 ERR_SN      .byte "Syntax",$00
