@@ -840,6 +840,8 @@ LDR_MOVE_GLOBALS
 
 ; I/O initialization
 LDR_IO_SETUP
+      lda   #$20
+      sta   ZP_HGRPAGE        ; make sure hgr and friends don't do bad stuff
       lda   P8_DEVNUM
       sta   START_DEV
       jsr   LDR_IO_INIT       ; init basic I/O
@@ -8593,6 +8595,19 @@ BYEPARMS
 ;           =      11   = Dbl Hires (unsupported in 64K version)
 ;           =     100   = Super Hires (unsupported at all for now)
 
+LAB_CLS
+      LDA   ZP_SCREEN
+      AND   #%1100
+      LSR
+      TAX
+      JMP   (CLSTAB,X)
+CLSTAB:
+      .addr LAB_HOME
+      .addr F8_CLRSCR
+      .addr F0_BKGND
+      .addr LAB_XCER
+      
+
 LAB_SCREEN
       JSR   LAB_GFPN
       LDA   Itempl
@@ -8612,14 +8627,41 @@ LAB_SCREEN
       BIT   TXTCLR
       BRA   LAB_SCREEN2
 :     DEC   A
-      BNE   :+                ; >2
+      BNE   :++               ; >2
       BIT   HIRES
-      BIT   TXTCLR      
-      BRA   LAB_SCREEN2
+      BIT   TXTCLR
+      JSR   LAB_GBYT          ; get current program byte
+      LDX   #$00              ; anticipate no param given
+      CMP   #','
+      BNE   :+
+      JSR   LAB_IGBY          ; increment and scan
+      JSR   LAB_GTBY          ; get byte param in X
+      CPX   #$01
+      BEQ   LAB_SCREEN2       ; inhibit making active if parm = 1
+:     JSR   LAB_SCREEN_SETHGR ; make active if not 1
+      CPX   #$00
+      BEQ   LAB_SCREEN2       ; if zero, switch page & mixed
+      RTS                     ; otherwise done
 :     BIT   TXTCLR            ; something else
       STZ   ZP_SCREEN
       JSR   LAB_SCREEN2
-      JMP   LAB_XCER          ; unsupported     
+      JMP   LAB_XCER          ; unsupported
+
+LAB_SCREEN_SETHGR      
+      LDA   ZP_SCREEN
+      AND   #%10              ; 2
+      ASL                     ; 4
+      ASL                     ; 8
+      ASL                     ; 10
+      ASL                     ; 20
+      ADC   #$20              ; 40 or 80
+      STA   ZP_HGRPAGE        ; Make active
+LAB_HGR_ORIGIN
+      LDA   #$00
+      TAX
+      TAY
+      JSR   F0_HPOSN
+      RTS      
 
 LAB_SMODE_GET
       BEQ   :+
@@ -8661,8 +8703,9 @@ LAB_HGR
       LSR
       BCS   :+                ; to HGR2
       JSR   F0_HGR
-      BRA   LAB_SCREEN2
+      BRA   :++
 :     JSR   F0_HGR2
+:     JSR   LAB_HGR_ORIGIN
       BRA   LAB_SCREEN2
 
 LAB_COLOR
@@ -8715,9 +8758,16 @@ LAB_GET_LORES_3ARG            ; "M1,M2 AT N" = A,Y AT X
       PLY                     ; M2 in Y
       RTS
 
+LAB_PLOT_NEXT
+      JSR   LAB_IGBY          ; skip comma and get next byte
 LAB_PLOT
       JSR   LAB_GET_LORES_XY
-      JMP   F8_PLOT
+      JSR   F8_PLOT
+      JSR   LAB_GBYT
+      CMP   #','              ; extended syntax, more X,Y pairs
+      BEQ   LAB_PLOT_NEXT
+      RTS
+      
 
 LAB_HLIN
       JSR   LAB_GET_LORES_3ARG  ; "A,Y at X" = H1,H2 at V
@@ -8744,7 +8794,64 @@ LAB_VLIN
       PHX
       PLY
       JMP   F8_VLINE          ; plot from (Y=H,A=V1) to (Y=H,V2)
-      
+
+LAB_HCOLOR
+      JSR   LAB_GTBY          ; get byte arg in x
+      CPX   #8
+      BCS   LAB_IAER
+      LDA   HCOLORTAB,X
+      STA   ZP_HCOLOR
+      RTS
+HCOLORTAB
+      .byte $00,$2A,$55,$7F,$80,$AA,$D5,$FF
+
+; This is annoyingly complicated and slowed by the fact that the Applesoft ROM
+; hi-res line routines overwrite the end of the EhBASIC IGBY/GBYT routine
+LAB_HPLOT_NEXT
+      JSR   LAB_GBYT          ; get current program stream byte
+      BNE   :++
+:     RTS
+:     CMP   #':'
+      BEQ   :--
+LAB_HPLOT
+      CMP   #TK_TO
+      BEQ   LAB_HGLINE
+      CMP   #TK_FOR           ; relative
+      BEQ   LAB_HGLINE_REL
+      CMP   #','
+      BNE   LAB_HPLOT1
+      JSR   LAB_IGBY          ; another coord pair, skip comma
+LAB_HPLOT1      
+      JSR   LAB_GADB          ; do HPLOT, X=Arg 2, Itempl,Itemph = Arg 1
+      TXA
+      LDX   Itempl
+      LDY   Itemph
+      JSR   F0_HPLOT0
+      BRA   LAB_HPLOT_NEXT
+LAB_HGLINE
+      JSR   LAB_HGLINE_PARMS
+      JSR   F0_HGLIN          ; wrecks ZP $D0-$D5, need to fixup
+      BRA   LAB_HGLINE_FIXUP
+LAB_HGLINE_REL                ; doesn't work as advertised
+      JSR   LAB_HGLINE_PARMS
+      JSR   F0_HLINRL
+LAB_HGLINE_FIXUP
+      LDX   #StrTab-LAB_2CEE
+:     LDA   LAB_2CEE-1,X      ; get byte from table
+      STA   LAB_IGBY-1,X      ; save byte in page zero
+      DEX                     ; decrement count
+      CPX   #StrTab-LAB_2CEE-8 ; fix last 8 bytes
+      BNE   :-
+      BRA   LAB_HPLOT_NEXT
+LAB_HGLINE_PARMS
+      JSR   LAB_IGBY          ; skip TO or FOR
+      JSR   LAB_GADB          ; X=Arg 2, Itempl,Itemph = Arg 1
+      TXA
+      TAY
+      LDX   Itemph
+      LDA   Itempl
+      RTS
+
 LAB_INVERSE
       PHA
       LDA   #$7F
@@ -10051,7 +10158,7 @@ LAB_LTBL
       .word LAB_OMER-1        ; reserved, print out of memory error
 .ifdef APPLE2
       .word LAB_SCREEN-1      ; SCREEN
-      .word LAB_XCER-1        ; CLS
+      .word LAB_CLS-1         ; CLS
       .word LAB_TEXT-1        ; TEXT
       .word LAB_GR-1          ; GR
       .word LAB_HGR-1         ; HGR
@@ -10059,8 +10166,8 @@ LAB_LTBL
       .word LAB_PLOT-1        ; PLOT
       .word LAB_HLIN-1        ; HLIN
       .word LAB_VLIN-1        ; VLIN
-;      .word LAB_HCOLOR-1      ; HCOLOR=
-;      .word LAB_HPLOT-1       ; HPLOT
+      .word LAB_HCOLOR-1      ; HCOLOR=
+      .word LAB_HPLOT-1       ; HPLOT
 ;      .word LAB_CHTYPE-1      ; CHTYPE
 ;      .word LAB_LOCK-1        ; LOCK
 ;      .word LAB_UNLOCK        ; UNLOCK
@@ -10489,12 +10596,16 @@ TAB_ASCH
 LBB_HEXS
       .byte "EX$(",TK_HEXS    ; HEX$(
 .ifdef APPLE2
+LBB_HCOLOR
+      .byte "COLOR=",TK_HCOLOR ; HCOLOR
 LBB_HGR
       .byte "GR",TK_HGR       ; HGR
 LBB_HLIN
       .byte "LIN",TK_HLIN     ; HLIN
 LBB_HOME
       .byte "OME",TK_HOME     ; HOME
+LBB_HPLOT
+      .byte "PLOT",TK_HPLOT   ; HPLOT
 LBB_HSCRN
       .byte "SCRN(",TK_HSCRN  ; HSCRN(
 .endif
@@ -10748,6 +10859,10 @@ LAB_KEYL
       .word LBB_HLIN          ; HLIN
       .byte 4,'V'
       .word LBB_VLIN          ; VLIN
+      .byte 7,'H'
+      .word LBB_HCOLOR        ; HCOLOR=
+      .byte 5,'H'
+      .word LBB_HPLOT         ; HPLOT
 .endif
 .endif
 
