@@ -269,7 +269,9 @@ FAC2_2            = FAC2_e+2  ; FAC2 mantissa2
 FAC2_3            = FAC2_e+3  ; FAC2 mantissa3
 FAC2_s            = FAC2_e+4  ; FAC2 sign (b7)
 .ifdef APPLE2
-OSptr             = FAC2_1
+OSptr             = FAC2_1    ; temp pointer for OS routines
+OSptr2            = FAC2_3    ; temp pointer for OS routines
+MoveDir           = FAC2_e    ; movement direction. negative = down
 .endif
 
 FAC_sc            = $B8       ; FAC sign comparison, Acc#1 vs #2
@@ -356,12 +358,12 @@ TK_SCREEN         = TK_RES00+1      ; SCREEN token
 TK_CLS            = TK_SCREEN+1     ; CLS token
 TK_TEXT           = TK_CLS+1        ; TEXT
 TK_GR             = TK_TEXT+1       ; GR
-TK_COLOR          = TK_GR+1         ; COLOR=
+TK_HGR            = TK_GR  +1       ; HGR & HGR 2
+TK_COLOR          = TK_HGR+1        ; COLOR=
 TK_PLOT           = TK_COLOR+1      ; PLOT
 TK_HLIN           = TK_PLOT+1       ; HLIN
 TK_VLIN           = TK_HLIN+1       ; VLIN
-TK_HGR            = TK_VLIN+1       ; HGR & HGR 2
-TK_HCOLOR         = TK_HGR+1        ; HCOLOR=
+TK_HCOLOR         = TK_VLIN+1       ; HCOLOR=
 TK_HPLOT          = TK_HCOLOR+1     ; HPLOT
 TK_CHTYPE         = TK_HPLOT+1      ; CHTYPE
 TK_LOCK           = TK_CHTYPE+1     ; LOCK
@@ -530,6 +532,8 @@ TK_BTN            = TK_PDL+1        ; BTN token
 TK_TELL           = TK_BTN+1        ; TELL token
 TK_SCRN           = TK_TELL+1       ; SCRN token
 TK_ERRNO          = TK_SCRN+1       ; ERRNO token
+; TK_PREFIXS      = TK_ERRNO+1      ; PREFIX$ token, cf. TK_PREFIX
+; TK_READF        = TK_PREFIXS+1    ; READ( token, cf. TK_READ
 TK_HSCRN          = TK_ERRNO+1      ; HSCRN token
 
 .out .sprintf("Highest token #: %x",TK_HSCRN)
@@ -632,44 +636,35 @@ SL7_PINIT         .addr 0
 SL7_PREAD         .addr 0
 SL7_PWRITE        .addr 0
 SL7_PSTATUS       .addr 0
-; System buffer mgt, buffer 0 is always at RAM_TOP-$400, 2 at RAM_TOP-$800, ...
-; Values:  $00 = unallocated, $FF = Free, $01-$7F = owned by file
+; System buffer mgt, buffer 1 is always at RAM_TOP-$400, 1 at RAM_TOP-$800, ...
+; Values: for Buff1+ 1st: neg = Deallocated but $FF=Free, $01-$7F=user ref
+;                    2nd: page # of buffer start, $00 if dealloc
 ; $80 = owned by GETBUF() function
-BUFFS             .byte 0       ; # of buffers in use
-BUFF0             .byte 0
-BUFF1             .byte 0
-BUFF2             .byte 0
-BUFF3             .byte 0
-BUFF4             .byte 0
-BUFF5             .byte 0
-BUFF6             .byte 0
-BUFF7             .byte 0
+BUFFS             .byte $00,0   ; # of buffers in use, unused
+                  .byte $80,0   ; Buff1
+                  .byte $80,0
+                  .byte $80,0
+                  .byte $80,0
+                  .byte $80,0
+                  .byte $80,0
+                  .byte $80,0
+                  .byte $80,0   ; Buff 8
 ; File mapping table, currently allows 8 BASIC files to be in use.
-FILE0B            .byte 0       ; BASIC file #, 0 = unassigned
-FILE1B            .byte 0       ; low bit set=ProDOS file
-FILE2B            .byte 0       ; high bit set=Pascal slot firmware
-FILE3B            .byte 0
-FILE4B            .byte 0
-FILE5B            .byte 0
-FILE6B            .byte 0
-FILE7B            .byte 0
-FILE0P            .byte 0       ; ProDOS file reference number or slot #
-FILE1P            .byte 0
-FILE2P            .byte 0
-FILE3P            .byte 0
-FILE4P            .byte 0
-FILE5P            .byte 0
-FILE6P            .byte 0
-FILE7P            .byte 0
-FILE0T            .byte 0       ; File type references
-FILE1T            .byte 0       ; for ProDOS these are $00 = file, $01=dir
-FILE2T            .byte 0
-FILE3T            .byte 0
-FILE4T            .byte 0
-FILE5T            .byte 0
-FILE6T            .byte 0
-FILE7T            .byte 0
-
+; entry bytes 0: basic file #, 0=unused slot, high bit=slot opened as file
+;             1: ProDOS file ref # or Slot #
+;             2: buffer #s      ; low nibble = 1st buf, high nib = 2nd buf (dirs)
+;             3: ProDOS file type opened, 0 = don't care
+FILES             .byte 0,0,0,0
+                  .byte 0,0,0,0
+                  .byte 0,0,0,0
+                  .byte 0,0,0,0
+                  .byte 0,0,0,0
+                  .byte 0,0,0,0
+                  .byte 0,0,0,0
+                  .byte 0,0,0,0
+;
+START_DEV         .byte 0       ; start device
+START_FILE        .byte 0       ; nonzero if startup file present
 
 
 .out .sprintf("Last global: %x",*-GLOBAL_PAGE)
@@ -718,8 +713,9 @@ Ram_top           = $C000     ; end of user RAM+1 (set as needed, should be page
       jmp LDR_START
       .byte $EE,$EE           ; signature of startup file buffer
       .byte $41               ; buffer size
+LDR_STARTUP_FILE
       .byte 9,"EHSTARTUP"     ; default pathname
-      .byte $41-10            ; remaining buffer
+      .res $41-10,0           ; remaining buffer
 LDR_START
       ; init reset vector to monitor
       ; later BASIC will change it to warm start
@@ -729,7 +725,95 @@ LDR_START
       sta   SOFTEV+1
       eor   #MAGIC_A5
       sta   POWERUP
+      jsr   LDR_MOVE_BASIC
+      jsr   LDR_MOVE_GLOBALS
+      jsr   LDR_IO_SETUP
+; set up ProDOS global page memory map
+      ldx   #$17
+:     lda   LDR_MEMTAB,x
+      sta   P8_MEMTAB,x
+      dex
+      bpl   :-
+; Prefixing and startup
+      lda   #<Ibuffs
+      sta   LDR_PARM_PREFIX+1
+      lda   #>Ibuffs
+      sta   LDR_PARM_PREFIX+2
+      jsr   P8_MLI
+      .byte $C7               ; GET_PREFIX
+      .addr LDR_PARM_PREFIX
+      bcs   :+
+      lda   Ibuffs
+      cmp   #$02
+      bcs   LDR_STARTUP       ; Prefix is already set, move on
+; Try to set prefix to our given path in $280
+      ldx   PathBuf
+      beq   LDR_TRY_DEV
+:     lda   PathBuf,x
+      cmp   #'/'
+      beq   LDR_PFX_PATH
+      dex
+      bne   :-
+      beq   LDR_TRY_DEV       ; no path ending in / found
+LDR_PFX_PATH
+      stx   PathBuf           ; update string len in pathbuf
+      lda   #<PathBuf
+      sta   LDR_PARM_PREFIX+1
+      lda   #>PathBuf
+      sta   LDR_PARM_PREFIX+2
+      jsr   P8_MLI
+      .byte $C6               ; SET_PREFIX
+      .addr LDR_PARM_PREFIX
+      bcc   LDR_STARTUP
+; Finally, try to set prefix to our startup volume
+LDR_TRY_DEV
+      lda   START_DEV
+      sta   LDR_PARM_ONLINE+1
+      jsr   P8_MLI
+      .byte $C5               ; ON_LINE
+      .addr LDR_PARM_ONLINE
+      bcs   LDR_GOBASIC       ; failde, no prefix to set, carry on
+      lda   $1000
+      and   #$0F
+      beq   LDR_GOBASIC       ; failed to get a volume name
+      tax
+      inx                     ; account for prepending /
+      stx   Ibuffs            ; write length
+      lda   #'/'   
+      sta   Ibuffs+1
+      dex
+:     lda   $1000,x
+      sta   Ibuffs+1,x        ; copy volume name
+      dex
+      bne   :-
+      lda   #<Ibuffs
+      sta   LDR_PARM_PREFIX+1
+      lda   #>Ibuffs
+      sta   LDR_PARM_PREFIX+2
+      jsr   P8_MLI
+      .byte $C6               ; SET_PREFIX
+      .addr LDR_PARM_PREFIX
+      bcs   LDR_GOBASIC       ; all attempts to set prefix failed
+; Look for startup file
+LDR_STARTUP
+      lda   LDR_STARTUP_FILE
+      beq   LDR_GOBASIC       ; if no startup file given
+      jsr   P8_MLI
+      .byte $C4               ; GET_FILE_INFO
+      .addr LDR_PARM_INFO
+      bcs   LDR_GOBASIC       ; failed
+      lda   LDR_PARM_INFO+3
+      and   #$01              ; check read bit
+      sta   START_FILE        ; and flag for later
+; launch interpreter
+LDR_GOBASIC
+      jmp   __interp_RUN__
+
+LDR_IO_INIT:
+      jmp   (IO_PINIT)
+
 ; move interpreter
+LDR_MOVE_BASIC
       lda   #<__interp_LOAD__
       ldy   #>__interp_LOAD__
       sta   ZP_A1
@@ -744,14 +828,21 @@ LDR_START
       sty   ZP_A4+1
       ldy   #$00              ; required to move properly
       jsr   F8_MOVE           ; firmware move routine
+      rts
 ; move globals, one page
+LDR_MOVE_GLOBALS
       ldx   #$00
 :     lda   __global_LOAD__,x
       sta   __global_RUN__,x
       inx
       bne   :-
+      rts
+
 ; I/O initialization
-      jsr   LDR_IOINIT        ; init basic I/O
+LDR_IO_SETUP
+      lda   P8_DEVNUM
+      sta   START_DEV
+      jsr   LDR_IO_INIT       ; init basic I/O
       sta   SETALTCHAR
 ; now scan slots for Pascal 1.1 firmware cards
       stz   $00
@@ -812,20 +903,8 @@ copyfwbyte
 copyfwbyte2
       sta   GLOBAL_PAGE       ; self-modifying
 gpage = *-2
+scandone                      ; the RTS is dual-purpose!
       rts 
-scandone
-; set up ProDOS global page memory map
-      ldx   #$17
-:     lda   LDR_MEMTAB,x
-      sta   P8_MEMTAB,x
-      dex
-      bpl   :-
-
-; launch interpreter
-      jmp   __interp_RUN__
-
-LDR_IOINIT:
-      jmp   (IO_PINIT)
 
 ; BASIC calls us after we warm start
 ; this is so we can do some finalizations such as:
@@ -849,14 +928,43 @@ LDR_CALLBACK:
       sta   SOFTEV+1
       eor   #MAGIC_A5
       sta   POWERUP
+      lda   START_FILE
+      bne   :+                ; do startup file
       rts
-    
-
+:     lda   LDR_STARTUP_FILE  ; length of startup file path
+      ldx   #<(LDR_STARTUP_FILE+1)
+      ldy   #>(LDR_STARTUP_FILE+1)
+      jsr   V_LOAD_S1         ; load the file
+      lda   #$80
+      sta   AUTO_RUN          ; flag interpreter to auto run loaded file
+      jmp   V_LOAD_S2         ; and do it
 LDR_SMSG:
-      .byte "Enhanced BASIC 2.22p2 / 0.1",$0D
+      .byte "Enhanced BASIC 2.22p2 / 0.10",$0D
       .byte "Apple ",$5d,$5b," port by M.G.",$0D
       .byte $00
+
+LDR_PARM_INFO
+      .byte $0a               ; Parm count
+      .addr LDR_STARTUP_FILE  ; pathname
+      .byte $00               ; access
+      .byte $00               ; file type
+      .word $0000             ; aux type
+      .byte $00               ; storage type
+      .word $0000             ; blocks used
+      .word $0000             ; mod date
+      .word $0000             ; mod time
+      .word $0000             ; create date
+      .word $0000             ; create time
+
+LDR_PARM_PREFIX
+      .byte $01               ; parm count
+      .addr $0200             ; buffer addr
       
+LDR_PARM_ONLINE
+      .byte $02
+      .byte $00               ; unit_num
+      .addr $1000             ; data_buffer
+
 ; P8 Memory map bytes, adjust to match interpreter run
 ; location
 LDR_MEMTAB  ; 24 bytes
@@ -890,7 +998,7 @@ LDR_MEMTAB  ; 24 bytes
 .popseg
 
 .segment "interp"
-      .org  $8e00            ; change and uncomment for easier debugging
+      .org  $8b00            ; change and uncomment for easier debugging
 .else
       *=    $C000
 .endif
@@ -8453,7 +8561,7 @@ LAB_TWOPI
       JMP   LAB_UFAC          ; unpack memory (AY) into FAC1 and return
 
 .ifdef APPLE2
-; Apple II Additional Command implementation
+; Apple II Additional Command implementation and supporting routines
 LAB_HOME
       LDA   #$0C              ; CTRL-L
       JMP   V_OUTP            ; clear screen
@@ -8469,8 +8577,174 @@ BYEPARMS
       .addr 0
       .byte 0
       .addr 0
-.endif
 
+; *************************************
+; Screen and Graphics Commands
+; *************************************
+
+; ZP_SCREEN = %00000000                   For Applesoft compatibility
+;           =        00 = Full page 1     "HGR0","TEXT0",etc.
+;           =        01 = Mixed page 1    "HGR1",etc. default
+;           =        10 = Full page 2     "HGR2",etc.
+;           =        11 = Mixed Page 2    "HGR3"
+;           =      00   = Text
+;           =      01   = Low Res
+;           =      10   = Hi res
+;           =      11   = Dbl Hires (unsupported in 64K version)
+;           =     100   = Super Hires (unsupported at all for now)
+
+LAB_SCREEN
+      JSR   LAB_GFPN
+      LDA   Itempl
+      CMP   #16
+      BCC   :+
+      JMP   LAB_IAER
+:     STA   ZP_SCREEN
+      LSR
+      LSR
+      BNE   :+                ; >0
+      BIT   DHIRESOFF         ; so user can get out of it
+      BIT   TXTSET
+      BRA   LAB_SCREEN2
+:     DEC   A
+      BNE   :+                ; >1
+      BIT   LORES
+      BIT   TXTCLR
+      BRA   LAB_SCREEN2
+:     DEC   A
+      BNE   :+                ; >2
+      BIT   HIRES
+      BIT   TXTCLR      
+      BRA   LAB_SCREEN2
+:     BIT   TXTCLR            ; something else
+      STZ   ZP_SCREEN
+      JSR   LAB_SCREEN2
+      JMP   LAB_XCER          ; unsupported     
+
+LAB_SMODE_GET
+      BEQ   :+
+      JSR   LAB_GFPN
+      LDA   Itempl
+      AND   #$03
+      .byte $2c               ; BIT Abs
+:     LDA   #$01              ; Default = TEXT1, GR1, HGR1 etc.
+      RTS
+
+LAB_GR
+      JSR   LAB_SMODE_GET
+      ORA   #%0100
+      STA   ZP_SCREEN
+      JSR   F0_GR
+LAB_SCREEN2
+      LDA   ZP_SCREEN
+      AND   #$03
+      LSR
+      TAY
+      LDA   #$00
+      ROL
+      TAX
+      LDA   MIXCLR,X
+      LDA   TXTPAGE1,Y
+      RTS
+
+LAB_TEXT
+      JSR   LAB_SMODE_GET
+      STA   ZP_SCREEN
+      JSR   F0_TEXT
+      BRA   LAB_SCREEN2
+
+LAB_HGR
+      JSR   LAB_SMODE_GET
+      ORA   #%1000
+      STA   ZP_SCREEN
+      LSR
+      LSR
+      BCS   :+                ; to HGR2
+      JSR   F0_HGR
+      BRA   LAB_SCREEN2
+:     JSR   F0_HGR2
+      BRA   LAB_SCREEN2
+
+LAB_COLOR
+      JSR   LAB_GFPN
+      LDA   Itempl
+      AND   #$0F
+      STA   ZP_COLOR
+      ASL
+      ASL
+      ASL
+      ASL
+      ORA   ZP_COLOR
+      STA   ZP_COLOR
+      RTS
+
+; Scan for CHR$(A) or comma, else syntax error and warm start
+LAB_COMMA_OR_A
+      LDY   #$00
+      CMP   (Bpntrl),Y
+      BEQ   :+
+      LDA   #','
+      CMP   (Bpntrl),Y
+      BEQ   :+
+      JMP   LAB_SNER
+:     JMP   LAB_IGBY
+
+LAB_IAER
+      LDX   #$2A
+      JMP   LAB_XERR
+      
+LAB_GET_LORES_XY              ; get X,Y pair into Y,A
+      JSR   LAB_GADB          ; X=2nd arg 0-255, Itempl,Itemph = 1st arg
+      CPX   #48
+      BCS   LAB_IAER
+      TXA
+      LDY   Itempl
+      CPY   #40
+      BCS   LAB_IAER
+      RTS
+      
+LAB_GET_LORES_3ARG            ; "M1,M2 AT N" = A,Y AT X
+      JSR   LAB_GADB
+      PHX                     ; push M2
+      LDA   Itempl
+      PHA                     ; push M1
+      LDA   #TK_AT
+      JSR   LAB_COMMA_OR_A    ; allow "M1,M2,N" or standard syntax
+      JSR   LAB_GTBY          ; get N (a byte) in X
+      PLA                     ; M1 in A
+      PLY                     ; M2 in Y
+      RTS
+
+LAB_PLOT
+      JSR   LAB_GET_LORES_XY
+      JMP   F8_PLOT
+
+LAB_HLIN
+      JSR   LAB_GET_LORES_3ARG  ; "A,Y at X" = H1,H2 at V
+      CMP   #40
+      BCS   LAB_IAER
+      CPY   #40
+      BCS   LAB_IAER
+      CPX   #48
+      BCS   LAB_IAER
+      STY   ZP_H2             ; ending column to H2
+      TAY
+      TXA
+      JMP   F8_HLINE          ; plot from (Y=H1,A=V) to (H2,A=V)
+
+LAB_VLIN
+      JSR   LAB_GET_LORES_3ARG  ; "A,Y at X" = V1,V2 at H
+      CMP   #48
+      BCS   LAB_IAER
+      CPY   #48
+      BCS   LAB_IAER
+      CPX   #40
+      BCS   LAB_IAER
+      STY   ZP_V2             ; ending row to V2
+      PHX
+      PLY
+      JMP   F8_VLINE          ; plot from (Y=H,A=V1) to (Y=H,V2)
+      
 LAB_INVERSE
       PHA
       LDA   #$7F
@@ -8484,8 +8758,599 @@ LAB_NORMAL
       BNE   INVST
       
 
+; *************************************
+; ProDOS Commands (except load/save)
+; *************************************
+
+LAB_PREFIX
+      BNE   LAB_PREFIX_SET    ; set prefix if arg given
+      JSR   LAB_CRLF
+      JSR   P8_Get_Prefix
+      LDX   PathBuf           ; length, always < 64 chars
+      LDA   #$00
+      STA   PathBuf+1,x       ; make zero-terminated string
+      LDA   #<(PathBuf+1)
+      LDY   #>(PathBuf+1)
+      JMP   LAB_18C3          ; print C string from memory and return
+LAB_PREFIX_SET
+      JSR   LAB_EVEX          ; evaluate string
+      JSR   LAB_EVST          ; a string?  YX=ptr, A=length
+      CMP   #65               ; length OK?
+      BCC   :+
+      LDX   #$1A              ; "string too long"
+      JMP   LAB_XERR          ; error out
+:     JSR   CopyPath
+      JSR   P8_Set_Prefix     ; Set prefix
+      BCS   P8_DoError2       ; FNF is fatal here
+      RTS
+      
+P8_DoPathNotFound
+      LDA   #$44
+P8_DoError2
+      JMP   P8_DoError
+      
+LAB_CATALOG
+      PHA
+      PHX
+      PHY
+      BNE   :+                ; arg given
+      JSR   P8_Get_Prefix
+      DEC   PathBuf           ; remove trailing /
+      BMI   P8_DoPathNotFound ; If null path, no guarantee we have a path though
+      BPL   :++               ; skip string eval
+:     JSR   LAB_EVEX          ; evaluate string
+      JSR   LAB_EVST          ; a string?  YX=ptr, A=length
+      JSR   CopyPath
+:     JSR   P8_Get_File_Info  ; get info
+      BCS   P8_DoError2       ; if file not found
+      LDA   PARM_File_Info+7  ; storage type
+      CMP   #$0F              ; is volume directory?
+      BEQ   :+
+      CMP   #$0D              ; is directory file?
+      BEQ   :+
+      LDX   #$32              ; type mismatch
+      JMP   LAB_XERR
+:     LDA   RES_BUF
+      STA   PARM_Open+3
+      LDA   RES_BUF+1
+      STA   PARM_Open+4
+      JSR   P8_Open           ; open directory
+      LDA   PARM_Open+5       ; ref num
+      STA   PARM_ReadWrite+1
+      STA   PARM_Close+1
+      AND   #$7F              ; shouldn't need this but just in case
+      JSR   LAB_GETBUF
+      PHY                     ; save buffer # on stack
+      BCS   :+
+      JMP   CAT_NO_BUFFERS    ; ruh roh
+:     STX   ASM_BUF           ; save buffer address
+      STA   ASM_BUF+1
+      STZ   OSptr2            ; where entry_length will go for now
+      LDA   #<$0200           ; size of block
+      STA   PARM_ReadWrite+4
+      LDA   #>$0200
+      STA   PARM_ReadWrite+5
+CAT_LOOP:
+      LDA   ASM_BUF
+      STA   PARM_ReadWrite+2
+      STA   OSptr
+      LDA   ASM_BUF+1
+      STA   PARM_ReadWrite+3
+      STA   OSptr+1
+      JSR   P8_Read
+      BCS   CAT_DONE          ; Failed, probably EOF, close it up
+      JSR   CAT_DO_BLOCK      ; display block
+      LDA   OSptr2            ; get entry_length
+      BNE   CAT_LOOP          ; if still zero or becomes zero, bail out
+CAT_DONE
+      PLY   ; buffer number
+      JSR   LAB_FREEBUF
+      JSR   P8_Close
+      PLY
+      PLX
+      PLA
+      RTS
+CAT_NO_BUFFERS
+      JSR   P8_Close
+      JMP   LAB_OMER
+
+CAT_DO_BLOCK
+      LDA   OSptr2
+      BEQ   CAT_HEADER
+      LDA   #$04
+      STA   OSptr
+      LDX   #$00              ; will count entries displayed in the block
+CAT_DO_BLOCK_LP               ; OSptr is pointing at an entry here
+      LDY   #$00              
+      LDA   (OSptr),y
+      BEQ   :+                ; inactive entry
+      PHX
+      JSR   CAT_DO_ENTRY      ; display the entry
+      PLX
+      LDA   KBD
+      CMP   #$83              ; CTRL-C
+      BNE   :+
+      STZ   OSptr2            ; make block loop bail out
+      RTS
+:     LDA   OSptr2            ; entry_length
+      JSR   LAB_ADD_OSPTR     ; add it
+      INX
+      CPX   OSptr2+1
+      BCC   CAT_DO_BLOCK_LP   ; haven't displayed all the things yet
+      RTS
+      
+CAT_HEADER
+      LDY   #$04
+      LDA   (OSptr),y
+      AND   #$F0
+      CMP   #$F0
+      BEQ   CAT_DO_HEADER     ; found volume header
+      CMP   #$E0              ; directory header
+      BEQ   CAT_DO_HEADER     ; found directory header
+      RTS                     ; something wrong, though, don't do block
+CAT_DO_HEADER
+      PHA
+      JSR   LAB_CRLF
+      PLA
+      CMP   #$F0
+      BEQ   CAT_VOL           ; go do volume mousetext
+      JSR   LAB_CRLF          ; else it's a subdir, do folder mousetext
+      LDA   #216
+      JSR   LAB_PRNA
+      LDA   #217
+      JSR   LAB_PRNA
+      LDA   #' '
+      BNE   :+
+CAT_VOL
+      LDA   #193              ; open-apple MT
+      JSR   LAB_PRNA
+      LDA   #' '
+      JSR   LAB_PRNA
+      LDA   #'/'              ; because it's a volume
+:     JSR   LAB_PRNA
+      LDA   (OSptr),y
+      AND   #$0F
+      JSR   CAT_DISP_NAME
+      JSR   LAB_CRLF
+      JSR   LAB_CRLF
+      LDY   #$23
+      LDA   (OSptr),y         ; entry_length
+      STA   OSptr2
+      INY
+      LDA   (OSptr),y         ; entries_per_block
+      STA   OSptr2+1
+      LDA   #$2B              ; First entry after header is in fixed position
+      STA   OSptr
+      LDX   #$01              ; already did one entry
+      BNE   CAT_DO_BLOCK_LP   ; always; get in the middle
+; on entry, Y=0, A has length of file name in low nibble, (OSptr) is at entry
+; and we can do what we want with any of the regs.
+CAT_DO_ENTRY
+      AND   #$0F
+      JSR   CAT_DISP_NAME
+      JSR   CAT_DISP_TYPE
+      JSR   CAT_DISP_BLOCKS
+      JSR   LAB_CRLF
+      RTS
+; At entry, (OSptr) points to 1 byte before name, A has length of name
+; and Y is 0.
+CAT_DISP_NAME
+      TAX
+:     INY
+      LDA   (OSptr),y
+      CMP   #' '
+      BCC   :+
+      ORA   #$20
+:     JSR   LAB_PRNA
+      DEX
+      BNE   :--
+      LDA   #' '              ; now fill out to 16th char
+:     INY
+      JSR   LAB_PRNA
+      CPY   #16
+      BCC   :-
+      RTS
+; display type. (OSptr) points to dir entry
+CAT_DISP_TYPE
+      LDA   #$04              ; string length
+      JSR   LAB_MSSP          ; allocate temp string pointed at by str_pl
+      LDY   #$10
+      LDX   #$FC
+:     INX
+      INX
+      INX
+      INX
+      LDA   FTYPES,x
+      BEQ   :++
+      CMP   (OSptr),y
+      BNE   :-
+      LDY   #$03
+:     INX
+      LDA   FTYPES,X
+      JSR   LAB_PRNA
+      DEY
+      BNE   :-
+      BEQ   CAT_DISP_AUXTYPE
+:     LDA   #'$'
+      JSR   LAB_PRNA
+      LDY   #$10
+      LDA   (OSptr),y
+      LDY   #$03              ; index into string, A2HX stores backwards!
+      JSR   LAB_A2HX          ; convert to hex
+      LDX   #$02
+      JSR   :+                ; print 2 chars
+CAT_DISP_AUXTYPE
+      LDA   #' '
+      JSR   LAB_PRNA
+      LDY   #$20
+      LDA   (OSptr),y
+      PHA
+      DEY
+      LDA   (OSptr),y
+      LDY   #$03
+      JSR   LAB_A2HX
+      PLA
+      JSR   LAB_A2HX
+      LDX   #$04
+:     INY
+      LDA   (str_pl),y
+      JSR   LAB_PRNA
+      DEX
+      BNE   :-
+      RTS
+CAT_DISP_BLOCKS
+      LDX   #$03
+:     LDA   OSptr,x
+      PHA
+      DEX
+      BPL   :-
+      LDY   #$14
+      LDA   (OSptr),y
+      PHA
+      DEY
+      LDA   (OSptr),y
+      TAY
+      PLA
+      JSR   LAB_AYFC          ; convert AY to float, overwrites FAC2
+      JSR   LAB_296E          ; convert to string at Decssp1
+      LDX   #$00
+:     PLA
+      STA   OSptr,x
+      INX
+      CPX   #$04
+      BCC   :-
+      LDX   #$00
+:     LDA   Decssp1,x         ; figure out 
+      BEQ   :+
+      INX
+      BNE   :-
+:     CPX   #$07
+      BCC   :+
+      LDX   #$06              ; clamp to 5 digits (including empty sign)
+:     TXA
+      EOR   #$FF
+      SEC
+      ADC   #$06              ; negate and add 6
+      BEQ   :++               ; no spaces
+      TAY
+:     LDA   #' '
+      JSR   LAB_PRNA  
+      DEY
+      BNE   :-
+:     TXA
+      TAY
+      LDX   #$00
+:     LDA   Decssp1,x
+      JSR   LAB_PRNA
+      INX
+      DEY
+      BNE   :-
+      LDA   #' '
+      JSR   LAB_PRNA
+      RTS      
+      
+LAB_ADD_OSPTR
+      CLC
+      ADC   OSptr
+      STA   OSptr
+      BCC   :+
+      INC   OSptr+1
+:     RTS
+      
+      
+      
+      
+; return carry clear if no buffer allocated
+; otherwise, carry set and Y=Buffer number, AX=buffer addr
+; this routine could use some TLC
+LAB_GETBUF
+      phy
+      phx
+      pha
+      ldy   #$00
+LAB_GETBUF_LP
+      iny
+      cpy   #$09
+      bcs   LAB_GETBUF_FAIL
+      tya
+      asl
+      tax
+      lda   BUFFS,x
+      bpl   LAB_GETBUF_LP     ; buffer is in use
+      inc   a
+      beq   LAB_GETBUF_GOT    ; a previously-freed, but allocated, buffer
+      phy
+      phx
+      jsr   LAB_ALLOC_BUFFER
+      plx
+      ply
+      bcc   LAB_GETBUF_FAIL
+      inc   BUFFS
+      tya
+      asl
+      tax
+      lda   Ememh
+      sta   BUFFS+1,x
+LAB_GETBUF_GOT
+      pla
+      sta   BUFFS,x
+      pla                     ; discard saved x
+      pla                     ; discard saved y
+      lda   BUFFS+1,x
+      ldx   Ememl             ; AX = buffer address, y = buffer number
+      sec
+      rts
+LAB_GETBUF_FAIL
+      clc
+      pla
+      plx
+      ply
+      rts
+
+      
+; input y=buffer number
+; return carry clear if no buffer freed
+; otherwise, carry set
+LAB_FREEBUF
+      phy
+      phx
+      pha
+      tya
+      asl
+      tax
+      lda   BUFFS,x
+      bmi   LAB_FREEBUF_FAIL  ; attempt to free already-free buffer
+      lda   #$FF
+      sta   BUFFS,x           ; signal buffer freed
+      ldx   #$08*2            ; scan buffers to deallocate, from the top
+:     lda   BUFFS,x
+      bpl   LAB_FREEBUF_SUCC  ; used buffer, stop scanning
+      inc   a
+      bne   :+                ; wasn't $FF, so must be dealloc
+      lda   BUFFS+1,x
+      cmp   Ememh
+      bne   LAB_FREEBUF_FAIL  ; Not at the addr we expect to deallocate
+      phx
+      jsr   LAB_DEALLOC_BUFFER
+      plx
+      bcc   LAB_FREEBUF_FAIL
+      dec   BUFFS             ; dec buffer count
+      lda   #$80
+      sta   BUFFS,x           ; signal buffer deallocated
+      lda   #$00
+      sta   BUFFS+1,x
+:     dex
+      dex
+      bne   :--
+LAB_FREEBUF_SUCC
+      sec
+      bcs   :+      
+LAB_FREEBUF_FAIL
+      brk                     ; TODO: remove when routine is proven
+      clc
+:     pla
+      plx
+      ply
+      rts
 
 
+; Allocate a 1K buffer.
+; If success, return carry set and Emem reflecting location of buffer
+; Strings are moved and descriptors adjusted.
+; If fail, return carry clear and no changes.
+; to move, we start at the bottom and work our way up
+LAB_ALLOC_BUFFER
+      jsr   ALLOC_PREP        ; Top of string storage now in X
+      sec
+      sbc   #$04
+      cmp   Earryh            ; collides with array top?
+      beq   LAB_ALLOC_FAIL    ; if same page as array top (note carry set)
+      bcs   :+                ; okay if we are >, fall through if <
+LAB_ALLOC_FAIL
+      clc                     ; no room!
+      rts
+:     tay                     ; move target now in y
+:     jsr   LAB_CopyPage      ; do copy page x to page y, preserves x and y
+      inx                     ; move up a page
+      iny
+      cpx   Ememh             ; Ememh = last usable page + 1
+      bcc   :-
+      lda   Ememh             ; fix general pointers
+      sbc   #$04              ; carry is set when loop ends
+      sta   Ememh
+      lda   Sstorh
+      sbc   #$04              ; ditto
+      sta   Sstorh
+      lda   #$80
+      sta   MoveDir           ; flag moving down          
+      jsr   LAB_SVAR_REBASE   ; rebase string variables
+      jsr   LAB_SARR_REBASE   ; rebase string arrays
+      sec
+      rts
+ALLOC_PREP
+      jsr   LAB_GARB
+      lda   Sstorl            ; calc and return page we are moving
+      sec                     ; by subtracting 1 from start of string storage
+      sbc   #$01              ; this avoids the case where Sstor is at Emem
+      lda   Sstorh
+      sbc   #$00
+      tax
+      rts      
+
+; Deallocate a 1K buffer.
+; If success, return carry clear and Emem reflecting location of next
+; buffer or RAM_TOP
+; to move, we start at the top and work our way down
+LAB_DEALLOC_BUFFER
+      jsr   ALLOC_PREP        ; do some prelim work & get bottom string page
+      clc
+      adc   #$04              ; destination 4 pages = 1K lower
+      cmp   RAM_TOP+1         ; collides with RAM_TOP or higher
+      bcc   :+                ; if <= RAM_TOP page
+      sec                     ; can't dealloc!
+      rts           
+:     tay                     ; dest page
+:     jsr   LAB_CopyPage      ; do copy page x to page y, preserves x and y
+      dex                     ; move down a page
+      dey
+      cpx   Sstorh            ; Sstorh = page at bottom of string memory
+      bcs   :-                ; continue copying why >= (want to include the page)
+      lda   Ememh             ; fix general pointers
+      clc
+      adc   #$04              ; if carry gets set here, something very wrong
+      sta   Ememh
+      lda   Sstorh
+      adc   #$04              ; ditto
+      sta   Sstorh
+      lda   #$00
+      sta   MoveDir           ; flag moving down          
+      jsr   LAB_SVAR_REBASE   ; rebase string variables
+      jsr   LAB_SARR_REBASE   ; rebase string arrays
+      sec
+      rts
+      
+LAB_SVAR_REBASE
+      lda   Svarl             ; now need to fix up all string vars
+      sta   OSptr             ; so copy var start ptr to OS scratch ptr
+      lda   Svarh
+      sta   OSptr+1
+SVAR_REBASE_LP
+      lda   OSptr+1
+      cmp   Sarryh
+      bcc   :+                ; skip next compare if less than
+      lda   OSptr
+      cmp   Sarryl
+      bcc   :+                ; less than, keep going
+      rts                     ; otherwise done
+:     ldy   #$01
+      lda   (OSptr),y         ; first descriptor
+      bpl   SVAR_REBASE_LPB   ; not string, go to next descriptor
+      ldy   #$04              ; offset of high byte of string address
+      jsr   LAB_REBASE_ADJ
+SVAR_REBASE_LPB               ; bottom of loop section
+      lda   OSptr
+      clc
+      adc   #$06              ; descriptor size
+      bcc   :+
+      inc   OSptr+1
+:     sta   OSptr
+      bra   SVAR_REBASE_LP
+
+; Routine to adjust pointers for buffer moves
+LAB_REBASE_ADJ
+      lda   (OSptr),y         ; get high byte
+      cmp   Svarh             ; is it in program text?
+      bcc   :+++              ; Ooh probably, or null ptr.  Don't adjust.
+      bit   MoveDir           ; we never move any page with program text
+      bmi   :+                ; so doing the adjustment is safe
+      clc
+      adc   #$04              ; four pages forward
+      bcc   :++
+:     sec
+      sbc   #$04              ; four pages back
+:     sta   (OSptr),y
+:     rts
+
+LAB_SARR_REBASE
+      lda   Sarryl            ; now need to fix up all string vars
+      sta   OSptr             ; so copy var start ptr to OS scratch ptr
+      lda   Sarryh
+      sta   OSptr+1
+SARR_REBASE_LP                ; enter with OSptr pointing at start of array
+      lda   OSptr+1           ; compare against end of them
+      cmp   Earryh
+      bcc   :+
+      lda   OSptr
+      cmp   Earryl
+      bcc   :+                ; less than, keep going
+      rts                     ; otherwise done
+:     ldy   #$02              ; add size to OSptr and store in OSptr2
+      lda   (OSptr),y         ; low byte of total size
+      clc
+      adc   OSptr
+      sta   OSptr2
+      iny
+      lda   (OSptr),y         ; high byte
+      adc   OSptr+1
+      sta   OSptr2+1          ; OSptr2 now points to next array
+      ldy   #$01              ; check if string arry
+      lda   (OSptr),y         ; high bit set if this is a string array
+      bpl   SARR_REBASE_LPB   ; it isn't, go to next iteration
+      ldy   #$04              ; start rebase, calculate start of elements
+      lda   (OSptr),y         ; get # of dimensions
+      asl                     ; *2 = total size of dimension list
+      bcc   :+                ; skip incr high byte if no carry
+      inc   OSptr+1
+      clc
+:     adc   OSptr             ; add low byte of pointer
+      bcc   :+
+      inc   OSptr+1           ; inc high byte if carry
+      clc
+:     adc   #$05              ; add fixed portion of header
+      sta   OSptr
+      bcc   :+
+      inc   OSptr+1           ; inc high byte if carry -- whew!
+:     ldy   #$02              ; stays constant in the inner loop
+SARR_REBASE_ILP               ; inner loop for each element
+      lda   OSptr+1           ; check for end (in case size 0 array?)
+      cmp   OSptr2+1
+      bcc   :+
+      lda   OSptr
+      cmp   OSptr2
+      bcs   SARR_REBASE_LPB   ; >=, hit end
+:     jsr   LAB_REBASE_ADJ    ; note Y constant
+      lda   OSptr
+      clc                     ; go to next element
+      adc   #$04              ; size of element
+      bcc   :+
+      inc   OSptr+1
+:     sta   OSptr
+      bra   SARR_REBASE_ILP     
+SARR_REBASE_LPB
+      lda   OSptr2+1
+      sta   OSptr+1
+      lda   OSptr2
+      sta   OSptr             ; OSptr now points to next array
+      bra   SARR_REBASE_LP   
+
+; copy page in X to page in Y, preserve X and Y regs
+LAB_CopyPage
+      pha
+      sty   OSptr2+1
+      phy
+      ldy   #$00
+      sty   OSptr
+      sty   OSptr2
+      stx   OSptr+1
+      sty   OSptr2
+:     lda   (OSptr),y
+      sta   (OSptr2),y
+      iny
+      bne   :-
+      ply
+      pla
+      rts
+.endif
 
 ; system dependent i/o vectors
 .ifdef APPLE2
@@ -8704,12 +9569,20 @@ V_LOAD_AND_RUN
 V_LOAD
       lda   #$ff              ; do load
       jsr   LDSV              ; execute load/save
+V_LOAD_S2                     ; jumped from loader code if startup file present
       bit   AUTO_RUN
       bmi   :+                ; no message if we will auto-run
       lda   #<LAB_RMSG        ; Ready message
       ldy   #>LAB_RMSG
       jsr   LAB_18C3          ; print it
 :     jmp   LAB_1319          ; re-link program, clear vars
+V_LOAD_S1:                    ; called by loader if startup file present
+      sta   START_FILE
+      lda   #$ff
+      pha
+      lda   START_FILE
+      bne   LDSV_S1           ; load it
+      brk                     ; crash if something stinks, to avoid doing SAVE
 V_SAVE
       lda   #$00
 LDSV
@@ -8717,19 +9590,12 @@ LDSV
       jsr   LAB_EVEX          ; evaluate string
       jsr   LAB_EVST          ; a string?  YX=ptr, A=length
       cmp   #$7f              ; length OK?
-      bcc   :+
+      bcc   LDSV_S1
       pla                     ; clean stack, maybe not needed
-      ldx   #$1c              ; "string too long"
+      ldx   #$1A              ; "string too long"
       jmp   LAB_XERR          ; error out
-:     sta   PathBuf           ; save length
-      sty   OSptr+1           ; save address on zpage
-      stx   OSptr
-      tay                     ; now copy string to path buffer
-:     lda   (OSptr),y
-      jsr   K_2UPPER          ; prodos paths in upper case
-      sta   PathBuf+1,y
-      dey
-      bpl   :-
+LDSV_S1                       ; called from loader code if startup file present
+      jsr   CopyPath
       jsr   P8_Get_File_Info
       bcc   LDSV_FIEX         ; file exists... go to next step
       pla                     ; get operation
@@ -8814,13 +9680,28 @@ LDSV_WRITE
 LDSV_CLOSE
       jsr   P8_Close
       rts
-      
+
+; Copy string to pathbuf (normally $280)
+; expected: A=length, XY=pointer to string
+CopyPath
+      sta   PathBuf           ; save length in 
+      stx   OSptr
+      sty   OSptr+1           ; save address on zpage
+      tay                     ; now copy string to path buffer
+:     lda   (OSptr),y
+      jsr   K_2UPPER          ; prodos paths in upper case
+      sta   PathBuf+1,y
+      dey
+      bpl   :-
+      rts   
 
 P8_CheckErrs
       sta   ERRNO_PRODOS
       bcs   P8_IsError
 :     rts
 P8_IsError
+      cmp   #$4C              ; EOF
+      bcs   :-                ; let caller decide how to handle EOF
       cmp   #$46              ; File Not Found
       bcs   :-                ; let caller decide how to handle FnF
 P8_DoError
@@ -8877,6 +9758,18 @@ P8_CloseAll
       .addr PARM_Close
       rts
 
+P8_Get_Prefix
+      jsr   P8_MLI
+      .byte $C7
+      .addr PARM_Prefix
+      bra   P8_CheckErrs
+
+P8_Set_Prefix
+      jsr   P8_MLI
+      .byte $C6
+      .addr PARM_Prefix
+      bra   P8_CheckErrs
+
 PARM_File_Info
       .byte $0a               ; Parm count
       .addr PathBuf           ; pathname
@@ -8916,6 +9809,10 @@ PARM_ReadWrite
 PARM_Close
       .byte $01               ; Parm Count
       .byte $00               ; Ref Num
+      
+PARM_Prefix
+      .byte $01
+      .addr PathBuf
 
 .else
 ; these are in RAM and are set by the monitor at start-up
@@ -9153,8 +10050,21 @@ LAB_2A9C = LAB_2A9B+1
 LAB_LTBL
       .word LAB_OMER-1        ; reserved, print out of memory error
 .ifdef APPLE2
-      .word LAB_XCER-1        ; SCREEN
+      .word LAB_SCREEN-1      ; SCREEN
       .word LAB_XCER-1        ; CLS
+      .word LAB_TEXT-1        ; TEXT
+      .word LAB_GR-1          ; GR
+      .word LAB_HGR-1         ; HGR
+      .word LAB_COLOR-1       ; COLOR=
+      .word LAB_PLOT-1        ; PLOT
+      .word LAB_HLIN-1        ; HLIN
+      .word LAB_VLIN-1        ; VLIN
+;      .word LAB_HCOLOR-1      ; HCOLOR=
+;      .word LAB_HPLOT-1       ; HPLOT
+;      .word LAB_CHTYPE-1      ; CHTYPE
+;      .word LAB_LOCK-1        ; LOCK
+;      .word LAB_UNLOCK        ; UNLOCK
+;      .word LAB_ERROR         ; ERROR
 .endif
 .endif
 
@@ -9214,8 +10124,8 @@ LAB_CTBL
       .word LAB_NORMAL-1      ; NORMAL
       .word LAB_XCER-1        ; PR#
       .word LAB_XCER-1        ; IN#
-      .word LAB_XCER-1        ; PREFIX
-      .word LAB_XCER-1        ; CAT
+      .word LAB_PREFIX-1      ; PREFIX
+      .word LAB_CATALOG-1     ; CAT
       .word LAB_XCER-1        ; OPEN
       .word LAB_XCER-1        ; CLOSE
       .word LAB_XCER-1        ; WRITE
@@ -9499,6 +10409,8 @@ LBB_CLEAR
 .ifdef APPLE2
 LBB_CLOSE
       .byte "LOSE",TK_CLOSE   ; CLOSE
+LBB_COLOR
+      .byte "OLOR=",TK_COLOR  ; COLOR=
 .endif
 LBB_CONT
       .byte "ONT",TK_CONT     ; CONT
@@ -9568,11 +10480,19 @@ LBB_GOSUB
       .byte "OSUB",TK_GOSUB   ; GOSUB
 LBB_GOTO
       .byte "OTO",TK_GOTO     ; GOTO
+.ifdef APPLE2
+LBB_GR
+      .byte "R",TK_GR         ; GR
+.endif
       .byte $00
 TAB_ASCH
 LBB_HEXS
       .byte "EX$(",TK_HEXS    ; HEX$(
 .ifdef APPLE2
+LBB_HGR
+      .byte "GR",TK_HGR       ; HGR
+LBB_HLIN
+      .byte "LIN",TK_HLIN     ; HLIN
 LBB_HOME
       .byte "OME",TK_HOME     ; HOME
 LBB_HSCRN
@@ -9665,6 +10585,10 @@ LBB_PEEK
       .byte "EEK(",TK_PEEK    ; PEEK(
 LBB_PI
       .byte "I",TK_PI         ; PI
+.ifdef APPLE2
+LBB_PLOT
+      .byte "LOT",TK_PLOT     ; PLOT
+.endif
 LBB_POKE
       .byte "OKE",TK_POKE     ; POKE
 LBB_POS
@@ -9746,6 +10670,8 @@ LBB_TAN
 .ifdef APPLE2
 LBB_TELL
       .byte "ELL(",TK_TELL    ; TELL(
+LBB_TEXT
+      .byte "EXT",TK_TEXT     ; TEXT
 .endif
 LBB_THEN
       .byte "HEN",TK_THEN     ; THEN
@@ -9772,6 +10698,10 @@ LBB_VAL
       .byte "AL(",TK_VAL      ; VAL(
 LBB_VPTR
       .byte "ARPTR(",TK_VPTR  ; VARPTR(
+.ifdef APPLE2
+LBB_VLIN
+      .byte "LIN",TK_VLIN     ; VLIN
+.endif
       .byte $00
 TAB_ASCW
 LBB_WAIT
@@ -9804,6 +10734,20 @@ LAB_KEYL
       .word LBB_SCREEN        ; SCREEN
       .byte 3,'C'
       .word LBB_CLS           ; CLS
+      .byte 4,'T'
+      .word LBB_TEXT          ; TEXT
+      .byte 2,'G'
+      .word LBB_GR            ; GR
+      .byte 3,'H'
+      .word LBB_HGR           ; HGR
+      .byte 6,'C'
+      .word LBB_COLOR         ; COLOR=
+      .byte 4,'P'
+      .word LBB_PLOT          ; PLOT
+      .byte 4,'H'
+      .word LBB_HLIN          ; HLIN
+      .byte 4,'V'
+      .word LBB_VLIN          ; VLIN
 .endif
 .endif
 
@@ -10223,5 +11167,28 @@ LAB_REDO    .byte " Redo from start",$0D,$00
 LAB_RMSG    .byte $0D,$0A,"Ready",$0D,$0A,$00
 LAB_IMSG    .byte " Extra ignored",$0D,$0A,$00
 LAB_REDO    .byte " Redo from start",$0D,$0A,$00
+.endif
+
+.ifdef APPLE2
+FTYPES                    ; file type table
+      .byte $01,"bad"     ; bad blocks
+      .byte $04,"txt"     ; text file
+      .byte $06,"bin"     ; binary
+      .byte $07,"scr"     ; screen
+      .byte $0B,"wpf"     ; word processor
+      .byte $0C,"sos"     ; SOS system file
+      .byte $0F,"dir"     ; directory
+      .byte $19,"adb"     ; appleworks DB
+      .byte $1A,"awp"     ; appleworks WP
+      .byte $1B,"asp"     ; appleworks SS (note not "ASS")
+      .byte $2C,"p8c"     ; general command file
+      .byte $E2,"atk"     ; Appletalk file
+      .byte $F0,"cmd"     ; P8 BASIC command file
+      .byte $F8,"eba"     ; User 8/EhBASIC
+      .byte $FC,"bas"     ; Applesoft
+      .byte $FD,"var"     ; Applesoft vars
+      .byte $FE,"rel"     ; Relocatable code
+      .byte $FF,"sys"     ; P8 system file
+      .byte $00           ; end of list
 .endif
 AA_end_basic
