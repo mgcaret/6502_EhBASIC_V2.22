@@ -5209,15 +5209,22 @@ LAB_20D0
 LAB_20DC
       STX   Sendh             ; save string end high byte
       LDA   ssptr_h           ; get string start high byte
+.ifdef APPLE2
+      ; This was driving me insane.  The patch below fails for STR$
+      ; because the conversion happens in the zero page, which it leaves
+      ; pointing in the zero page.
+      CMP   RAM_BASE+1
+      BCS   LAB_RTST
+.else
 ; *** begin RAM above code / Ibuff above EhBASIC patch ***
 ; *** replace
-;      CMP   #>Ram_base        ; compare with start of program memory
-;      BCS   LAB_RTST          ; branch if not in utility area
+;     CMP   #>Ram_base        ; compare with start of program memory
+;     BCS   LAB_RTST          ; branch if not in utility area
 ; *** with
       CMP   #>Ibuffs          ; compare with location of input buffer page
       BNE   LAB_RTST          ; branch if not in utility area
 ; *** end   RAM above code / Ibuff above EhBASIC patch ***
-
+.endif
                               ; string in utility area, move to string memory
       TYA                     ; copy length to A
       JSR   LAB_209C          ; copy des_pl/h to des_2l/h and make string space A bytes
