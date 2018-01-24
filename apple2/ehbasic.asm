@@ -365,7 +365,9 @@ TK_HLIN           = TK_PLOT+1       ; HLIN
 TK_VLIN           = TK_HLIN+1       ; VLIN
 TK_HCOLOR         = TK_VLIN+1       ; HCOLOR=
 TK_HPLOT          = TK_HCOLOR+1     ; HPLOT
-TK_CHTYPE         = TK_HPLOT+1      ; CHTYPE
+TK_BEEP           = TK_HPLOT+1      ; BEEP
+TK_POP            = TK_BEEP+1       ; POP
+TK_CHTYPE         = TK_POP+1        ; CHTYPE
 TK_LOCK           = TK_CHTYPE+1     ; LOCK
 TK_UNLOCK         = TK_LOCK+1       ; UNLOCK
 TK_ERROR          = TK_UNLOCK+1     ; ERROR
@@ -1000,7 +1002,7 @@ LDR_MEMTAB  ; 24 bytes
 .popseg
 
 .segment "interp"
-      .org  $8b00            ; change and uncomment for easier debugging
+      .org  $8A00            ; change and uncomment for easier debugging
 .else
       *=    $C000
 .endif
@@ -1703,6 +1705,7 @@ LAB_13A0
       BVS   :+                ; don't do if quoting
       INX                     ; skip this byte
       BNE   LAB_13AC          ; and go back to processing
+:
 .endif
 
 LAB_13A6
@@ -1717,15 +1720,19 @@ LAB_13A6
 LAB_13AC
       LDA   Ibuffs,X          ; get byte from input buffer
       BEQ   LAB_13EC          ; if null save byte then exit
-.ifdef APPLE2
-      BIT   Oquote            ; check quote mode
-      BVS   :+                ; skip upper casing if DATA
-      JSR   K_2UPPER
-:
-.endif
+
 .ifdef LOW_TOKENS
       CMP   #$20
       BCC   LAB_13A0          ; skip if not unprintable
+.endif
+
+.ifdef MIXED_CASE
+      CMP   #'{'
+      BCS   LAB_13EC
+      CMP   #'a'
+      BCC   PATCH_LC
+      AND   #$DF
+PATCH_LC
 .endif
       CMP   #'_'              ; compare with "_"
       BCS   LAB_13EC          ; if >= go save byte then continue crunching
@@ -1759,10 +1766,12 @@ LAB_13CC
 LAB_13D0
       CMP   (ut2_pl),Y        ; compare with keyword first character table byte
       BEQ   LAB_13D1          ; go do word_table_chr if match
-
+.ifdef MIXED_CASE
+      BCC   PATCH_LC2
+.else
       BCC   LAB_13EA          ; if < keyword first character table byte go restore
                               ; Y and save to crunched
-
+.endif
       INY                     ; else increment pointer
       BNE   LAB_13D0          ; and loop (branch always)
 
@@ -1790,12 +1799,10 @@ LAB_13D8
       CMP   #$20              ; is low token?
       BCC   LAB_13EA          ; yes, go save it
 .endif
-
       INX                     ; next buffer byte
-.ifdef APPLE2
-      LDA   Ibuffs,X
-      JSR   K_2UPPER
-      CMP   (ut2_pl),Y
+.ifdef  MIXED_CASE
+      EOR   Ibuffs,X          ; check bits against table
+      AND   #$DF              ; mask lower case bit
 .else
       CMP   Ibuffs,X          ; compare with byte from input buffer
 .endif
@@ -1874,6 +1881,9 @@ LAB_141D
       LDA   (ut2_pl),Y        ; get byte from keyword table
       BNE   LAB_13D8          ; go test next word if not zero byte (end of table)
 
+.ifdef MIXED_CASE
+PATCH_LC2
+.endif
                               ; reached end of table with no match
       LDA   Ibuffs,X          ; restore byte from input buffer
       BPL   LAB_13EA          ; branch always (all bytes in buffer are $00-$7F)
@@ -1905,14 +1915,6 @@ LAB_142P
       DEC   Bpntrl            ; allow for increment
       RTS
  
-.ifdef APPLE2     
-K_2UPPER
-      JSR   LAB_CASC          ; is alphabetic?
-      BCC   :+                ; nope
-      AND   #$DF              ; to upper
-:     RTS
-.endif
-
 ; search Basic for temp integer line number from start of mem
 
 LAB_SSLN
@@ -8858,6 +8860,27 @@ LAB_HGLINE_PARMS
       LDX   Itemph
       LDA   Itempl
       RTS
+      
+LAB_BEEP
+      BNE   :+
+      JMP   F8_BELL1
+:     JSR   LAB_GTBY          ; get N (a byte) in X
+      PHX
+      LDA   #TK_FOR           ; allow BEEP m FOR n or BEEP m,n
+      JSR   LAB_COMMA_OR_A
+      JSR   LAB_GTBY          ; X has duration, overwrites FAC2 (hence OSptr)
+      PLY
+      STY   OSptr
+:     LDY   OSptr
+      LDA   SPKR
+:     LDA   #$05
+:     DEC   A
+      BNE   :-
+      DEY
+      BNE   :--
+      DEX
+      BNE   :---
+      RTS
 
 LAB_INVERSE
       PHA
@@ -9803,10 +9826,12 @@ CopyPath
       sty   OSptr+1           ; save address on zpage
       tay                     ; now copy string to path buffer
 :     lda   (OSptr),y
-      jsr   K_2UPPER          ; prodos paths in upper case
-      sta   PathBuf+1,y
+      cmp   #'a'
+      bcc   :+
+      and   #$DF              ; prodos paths in upper case
+:     sta   PathBuf+1,y
       dey
-      bpl   :-
+      bpl   :--
       rts   
 
 P8_CheckErrs
@@ -10175,10 +10200,12 @@ LAB_LTBL
       .word LAB_VLIN-1        ; VLIN
       .word LAB_HCOLOR-1      ; HCOLOR=
       .word LAB_HPLOT-1       ; HPLOT
+      .word LAB_BEEP-1        ; BEEP
 ;      .word LAB_CHTYPE-1      ; CHTYPE
 ;      .word LAB_LOCK-1        ; LOCK
 ;      .word LAB_UNLOCK        ; UNLOCK
 ;      .word LAB_ERROR         ; ERROR
+;      .word LAB_SYS           ; SYS
 .endif
 .endif
 
@@ -10487,6 +10514,10 @@ LBB_AT
 .endif
       .byte $00
 TAB_ASCB
+.ifdef APPLE2
+LBB_BEEP
+      .byte "EEP",TK_BEEP     ; BEEP
+.endif
 LBB_BINS
       .byte "IN$(",TK_BINS    ; BIN$(
 LBB_BITCLR
@@ -10870,6 +10901,8 @@ LAB_KEYL
       .word LBB_HCOLOR        ; HCOLOR=
       .byte 5,'H'
       .word LBB_HPLOT         ; HPLOT
+      .byte 4,'B'
+      .word LBB_BEEP          ; BEEP
 .endif
 .endif
 

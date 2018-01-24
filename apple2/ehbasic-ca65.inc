@@ -1,6 +1,7 @@
 APPLE2 = 1                      ; enable Apple II mods
 NO_INT = 1                      ; disable interrupt handling
 LOW_TOKENS = 1                  ; enable tokens 1-31
+MIXED_CASE = 1                  ; allow mixed-case keywords
 ; APPLE2_128K = 1               ; enable 128K Apple II
 
 ; Version of Apple ][ Port
@@ -49,6 +50,7 @@ F8_GBASCALC   = $F847   ; O:A=V,XY=XY     A=rownum.  calculate (ZP_GBASL)
 
 ; text, keyboard
 F8_INIT       = $FB2F   ; O:A=V,XY=U
+F8_BELL1      = $FBDD   ; O:A=U,X=X,Y=0
 F8_HOME       = $FC58   ; O:AY=U,X=X
 F8_CLREOL     = $FC9C   ; O:AY=U,X=X
 F8_WAIT       = $FCA8   ; O:A=$00,XY=XY
