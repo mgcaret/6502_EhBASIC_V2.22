@@ -719,9 +719,40 @@ Ram_top           = $C000     ; end of user RAM+1 (set as needed, should be page
 LDR_STARTUP_FILE
       .byte 9,"EHSTARTUP"     ; default pathname
       .res $41-10,0           ; remaining buffer
+
+; Quit the loader, used when we can't run due to insufficient hardware
+LDR_QUIT:
+      JSR   P8_MLI
+      .byte $65               ; QUIT code
+      .addr :+
+      BRK
+:     .byte 4
+      .byte 0
+      .addr 0
+      .byte 0
+      .addr 0
+      
 LDR_START
+      ; check for 65C02
+      sed
+      lda   #$99
+      clc
+      adc   #$01
+      cld
+      bmi   LDR_QUIT          ; not a 65C02/802/816
+.ifdef APPLE2_128K
+      ; check for 128K
+      lda   #%00010000
+      bit   P8_MACHID
+      beq   LDR_QUIT
+.endif
+      ; check for 64K (also needed if 128K)
+      lda   #%00100000
+      bit   P8_MACHID
+      beq   LDR_QUIT
+      
       ; init reset vector to monitor
-      ; later BASIC will change it to warm start
+      ; later we will change it to warm start
       lda   #<F8_MONITOR
       sta   SOFTEV            ; RESET vector
       lda   #>F8_MONITOR
@@ -2360,6 +2391,7 @@ LAB_1609
                               ; then "return" to vector
 
 .ifdef LOW_TOKENS
+; 65C02 dispatch
 LAB_1620
       ASL
       TAX
