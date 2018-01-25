@@ -1,0 +1,8 @@
+Notes:
+
+The whole interpreter could be made smaller and faster by using the 'C02 JMP (foo,x) to implement the token dispatcher.
+
+the ASL / TAY / LDA / PHA / LDA / PHA / JMP IGBY sequence could be replaced with
+ASL / TAX / JSR IGBY / JMP (table,x) saving 6 bytes and some clock cycles.
+
+

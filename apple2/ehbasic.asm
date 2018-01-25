@@ -2362,12 +2362,9 @@ LAB_1609
 .ifdef LOW_TOKENS
 LAB_1620
       ASL
-      TAY
-      LDA   LAB_LTBL+1,Y
-      PHA
-      LDA   LAB_LTBL,Y
-      PHA
-      JMP   LAB_IGBY
+      TAX
+      JSR   LAB_IGBY
+      JMP   (LAB_LTBL,X)
 .endif
 
 ; CTRL-C check jump. this is called as a subroutine but exits back via a jump if a
@@ -10288,24 +10285,25 @@ LAB_2A9C = LAB_2A9B+1
       .byte $00,$00,$01       ; 1
 
 .ifdef LOW_TOKENS
+; Note this table is for JMP (addr,x)
 LAB_LTBL
-      .word LAB_OMER-1        ; reserved, print out of memory error
+      .word LAB_OMER          ; reserved, print out of memory error
 .ifdef APPLE2
-      .word LAB_SCREEN-1      ; SCREEN
-      .word LAB_CLS-1         ; CLS
-      .word LAB_TEXT-1        ; TEXT
-      .word LAB_GR-1          ; GR
-      .word LAB_HGR-1         ; HGR
-      .word LAB_COLOR-1       ; COLOR=
-      .word LAB_PLOT-1        ; PLOT
-      .word LAB_HLIN-1        ; HLIN
-      .word LAB_VLIN-1        ; VLIN
-      .word LAB_HCOLOR-1      ; HCOLOR=
-      .word LAB_HPLOT-1       ; HPLOT
-      .word LAB_BEEP-1        ; BEEP
-      .word LAB_ONLINE-1      ; ONLINE
-;      .word LAB_CHTYPE-1      ; CHTYPE
-;      .word LAB_LOCK-1        ; LOCK
+      .word LAB_SCREEN        ; SCREEN
+      .word LAB_CLS           ; CLS
+      .word LAB_TEXT          ; TEXT
+      .word LAB_GR            ; GR
+      .word LAB_HGR           ; HGR
+      .word LAB_COLOR         ; COLOR=
+      .word LAB_PLOT          ; PLOT
+      .word LAB_HLIN          ; HLIN
+      .word LAB_VLIN          ; VLIN
+      .word LAB_HCOLOR        ; HCOLOR=
+      .word LAB_HPLOT         ; HPLOT
+      .word LAB_BEEP          ; BEEP
+      .word LAB_ONLINE        ; ONLINE
+;      .word LAB_CHTYPE        ; CHTYPE
+;      .word LAB_LOCK          ; LOCK
 ;      .word LAB_UNLOCK        ; UNLOCK
 ;      .word LAB_ERROR         ; ERROR
 ;      .word LAB_SYS           ; SYS
