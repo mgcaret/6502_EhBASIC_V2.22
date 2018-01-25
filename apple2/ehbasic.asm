@@ -366,7 +366,8 @@ TK_VLIN           = TK_HLIN+1       ; VLIN
 TK_HCOLOR         = TK_VLIN+1       ; HCOLOR=
 TK_HPLOT          = TK_HCOLOR+1     ; HPLOT
 TK_BEEP           = TK_HPLOT+1      ; BEEP
-TK_POP            = TK_BEEP+1       ; POP
+TK_ONLINE         = TK_BEEP+1       ; ONLINE
+TK_POP            = TK_ONLINE+1     ; POP
 TK_CHTYPE         = TK_POP+1        ; CHTYPE
 TK_LOCK           = TK_CHTYPE+1     ; LOCK
 TK_UNLOCK         = TK_LOCK+1       ; UNLOCK
@@ -1345,6 +1346,32 @@ LAB_124B
       RTS
 
 .ifdef APPLE2
+LAB_GP8E                      ; get P8 error string
+      LDX   #$00
+:     LDA   LAB_P8ER,x
+      BEQ   :+                ; hit end of table, set carry and exit
+      INX                     ; to pointer
+      CMP   ERRNO_PRODOS
+      BEQ   :++               ; found it, clear carry and exit
+      INX                     ; to next entry
+      INX
+      BNE   :-                ; always, unless end of table marker gone
+:     SEC
+      RTS
+:     CLC
+      RTS
+      
+LAB_PP8E                      ; Print ProDOS 8 Error
+      BCS   :+                ; if X does not have valid error msg ref
+      LDA   LAB_P8ER,x        ; low byte of error message
+      INX
+      LDY   LAB_P8ER,x        ; high byte of error message
+      JMP   LAB_18C3          ; print P8 error msg
+:     LDX   ERRNO_PRODOS
+      LDA   #$00
+      JSR   LAB_295E          ; print P8 error #
+      RTS    
+
 LAB_XCER
       LDX   #$28
       BNE   LAB_XERR
@@ -1374,25 +1401,9 @@ LAB_XERR
       LDA   ERRNO_BASIC       ; get error back
       CMP   #$30              ; is P8 error?
       BNE   NOTP8ERR
-      LDX   #$00
-:     LDA   LAB_P8ER,x
-      BEQ   P8ERRNO          ; hit end of table
-      INX                    ; to pointer
-      CMP   ERRNO_PRODOS
-      BEQ   P8PERR
-      INX                     ; to next entry
-      INX
-      BNE   :-                ; always, unless end of table marker gone
-P8PERR
-      LDA   LAB_P8ER,x           ; low byte of error message
-      INX
-      LDY   LAB_P8ER,x           ; high byte of error message
-      JSR   LAB_18C3          ; print P8 error msg
-      BRA   NOTP8ERR          ; misnomer in this case
-P8ERRNO
-      LDX   ERRNO_PRODOS
-      LDA   #$00
-      JSR   LAB_295E          ; print P8 error #
+      LDA   ERRNO_PRODOS
+      JSR   LAB_GP8E          ; get error string
+      JSR   LAB_PP8E          ; print error string
 NOTP8ERR
 .endif      
       LDA   #<LAB_EMSG        ; point to " Error" low addr
@@ -8603,6 +8614,12 @@ BYEPARMS
 ;           =      10   = Hi res
 ;           =      11   = Dbl Hires (unsupported in 64K version)
 ;           =     100   = Super Hires (unsupported at all for now)
+; So:  0 = Text Page 1,         1 = Text Page 1 (since the mixed switch
+;      2 = Text Page 2,         3 = Text Page 2  has no meaning)
+;      4 = Lo-res page 1 full,  5 = Lo-res page 1 mixed
+;      6 = Lo-res page 2 full,  7 = Lo-res page 2 mixed
+;      8 = Hi-res page 1 full,  9 = Hi-res page 1 mixed
+;     10 = Hi-res page 2 full, 11 = Hi-res page 2 mixed
 
 LAB_CLS
       LDA   ZP_SCREEN
@@ -8616,61 +8633,60 @@ CLSTAB:
       .addr F0_BKGND
       .addr LAB_XCER
       
-
+; SCREEN mode[,flag] - display a text or graphics screen
+; See modes table above.  If flag is present, sets which page is
+; used for hi-res commands, 1 or 2
 LAB_SCREEN
       JSR   LAB_GFPN
       LDA   Itempl
-      CMP   #16
+      CMP   #12
       BCC   :+
       JMP   LAB_IAER
-:     STA   ZP_SCREEN
+:     STA   ZP_SCREEN  
+      AND   #%1100
       LSR
-      LSR
-      BNE   :+                ; >0
-      BIT   DHIRESOFF         ; so user can get out of it
+      TAX
+      JMP   (SCRTAB,X)
+SCRTAB:
+      .addr LAB_SCREEN_00_03
+      .addr LAB_SCREEN_04_07
+      .addr LAB_SCREEN_08_11
+;     .addr LAB_XCER          ; not needed for now
+LAB_SCREEN_00_03
       BIT   TXTSET
       BRA   LAB_SCREEN2
-:     DEC   A
-      BNE   :+                ; >1
+LAB_SCREEN_04_07
+      BIT   TXTCLR
       BIT   LORES
-      BIT   TXTCLR
       BRA   LAB_SCREEN2
-:     DEC   A
-      BNE   :++               ; >2
-      BIT   HIRES
+LAB_SCREEN_08_11
       BIT   TXTCLR
-      JSR   LAB_GBYT          ; get current program byte
-      LDX   #$00              ; anticipate no param given
-      CMP   #','
-      BNE   :+
-      JSR   LAB_IGBY          ; increment and scan
-      JSR   LAB_GTBY          ; get byte param in X
-      CPX   #$01
-      BEQ   LAB_SCREEN2       ; inhibit making active if parm = 1
-:     JSR   LAB_SCREEN_SETHGR ; make active if not 1
-      CPX   #$00
-      BEQ   LAB_SCREEN2       ; if zero, switch page & mixed
-      RTS                     ; otherwise done
-:     BIT   TXTCLR            ; something else
-      STZ   ZP_SCREEN
-      JSR   LAB_SCREEN2
-      JMP   LAB_XCER          ; unsupported
+      BIT   HIRES
+      JSR   LAB_HGR_DRAWSCRN_GET
+      BRA   LAB_SCREEN2
 
-LAB_SCREEN_SETHGR      
+; set HGR drawing page by BASIC statement ,X
+; if not specified, set to whatever is in ZP_SCREEN
+LAB_HGR_DRAWSCRN_GET
+      JSR   LAB_GBYT
+      CMP   #','
+      BEQ   :+
       LDA   ZP_SCREEN
-      AND   #%10              ; 2
-      ASL                     ; 4
-      ASL                     ; 8
-      ASL                     ; 10
-      ASL                     ; 20
-      ADC   #$20              ; 40 or 80
-      STA   ZP_HGRPAGE        ; Make active
-LAB_HGR_ORIGIN
-      LDA   #$00
+      LSR
+      AND   #$01
       TAX
-      TAY
-      JSR   F0_HPOSN
-      RTS      
+      INX
+      BRA   LAB_HGR_DRAWSCRN
+:     JSR   LAB_IGBY          ; skip comma
+      JSR   LAB_GTBY          ; get arg in X
+LAB_HGR_DRAWSCRN              ; set HGR drawing page by number in X
+      LDA   #$20              ; anticipate page 1
+      CPX   #$02
+      BCC   :+                ; 0 or 1 gets us page 1, 2+ page 2
+      ASL
+:     STA   ZP_HGRPAGE
+      RTS
+
 
 LAB_SMODE_GET
       BEQ   :+
@@ -8714,8 +8730,7 @@ LAB_HGR
       JSR   F0_HGR
       BRA   :++
 :     JSR   F0_HGR2
-:     JSR   LAB_HGR_ORIGIN
-      BRA   LAB_SCREEN2
+:     BRA   LAB_SCREEN2
 
 LAB_COLOR
       JSR   LAB_GFPN
@@ -8920,6 +8935,62 @@ LAB_PREFIX_SET
       JSR   P8_Set_Prefix     ; Set prefix
       BCS   P8_DoError2       ; FNF is fatal here
       RTS
+      
+LAB_ONLINE
+      LDA   #$00
+      STA   PARM_Online+1     ; $00 = all units
+      LDA   RES_BUF
+      STA   PARM_Online+2
+      STA   OSptr
+      LDA   RES_BUF+1
+      STA   PARM_Online+3
+      STA   OSptr+1
+      JSR   P8_Online         ; Error trapped elsewhere
+LAB_ONLINE_LP
+      LDY   #$00
+      LDA   (OSptr),y
+      BEQ   LAB_ONLINE_DONE
+      JSR   LAB_PRUNIT
+      JSR   LAB_PRSP
+      LDA   (OSptr),y
+      AND   #$0F
+      BNE   LAB_ONLINE_PRVOL
+      INY
+      LDA   (OSptr),y
+      STA   ERRNO_PRODOS
+      JSR   LAB_GP8E
+      JSR   LAB_PP8E
+      LDY   #$01
+      LDA   (OSptr),y
+      CMP   #$57              ; duplicate volume
+      BNE   LAB_ONLINE_NEXT
+      JSR   LAB_PRSP
+      INY
+      LDA   (OSptr),y         ; unit of duplicate
+      JSR   LAB_PRUNIT
+      BRA   LAB_ONLINE_NEXT
+LAB_ONLINE_PRVOL
+      PHA
+      LDA   #'/'
+      JSR   LAB_PRNA
+      PLA
+      JSR   CAT_DISP_NAME
+LAB_ONLINE_NEXT
+      JSR   LAB_CRLF
+      LDA   #$10
+      JSR   LAB_ADD_OSPTR
+      LDA   OSptr
+      BNE   LAB_ONLINE_LP
+LAB_ONLINE_DONE
+      STZ   ERRNO_PRODOS      ; clear temp error codes
+      RTS
+      
+LAB_PRSP
+      PHA
+      LDA   #' '
+      JSR   LAB_PRNA
+      PLA
+      RTS   
       
 P8_DoPathNotFound
       LDA   #$44
@@ -9194,7 +9265,26 @@ LAB_ADD_OSPTR
       INC   OSptr+1
 :     RTS
       
-      
+LAB_PRUNIT
+      PHA
+      LDA   #'.'
+      JSR   LAB_PRNA
+      PLA
+      PHA
+      LSR
+      LSR
+      LSR
+      LSR
+      AND   #$07
+      ORA   #$30
+      JSR   LAB_PRNA
+      PLA
+      ROL
+      ROL
+      AND   #$01
+      INC   A
+      ORA   #$30
+      JMP   LAB_PRNA
       
       
 ; return carry clear if no buffer allocated
@@ -9908,6 +9998,12 @@ P8_Set_Prefix
       .byte $C6
       .addr PARM_Prefix
       bra   P8_CheckErrs
+      
+P8_Online
+      jsr   P8_MLI
+      .byte $C5
+      .addr PARM_Online
+      bra   P8_CheckErrs
 
 PARM_File_Info
       .byte $0a               ; Parm count
@@ -9952,6 +10048,12 @@ PARM_Close
 PARM_Prefix
       .byte $01
       .addr PathBuf
+
+PARM_Online
+      .byte $02
+      .byte $00               ; unit num
+      .addr $0000             ; data buffer addr
+      
 
 .else
 ; these are in RAM and are set by the monitor at start-up
@@ -10201,6 +10303,7 @@ LAB_LTBL
       .word LAB_HCOLOR-1      ; HCOLOR=
       .word LAB_HPLOT-1       ; HPLOT
       .word LAB_BEEP-1        ; BEEP
+      .word LAB_ONLINE-1      ; ONLINE
 ;      .word LAB_CHTYPE-1      ; CHTYPE
 ;      .word LAB_LOCK-1        ; LOCK
 ;      .word LAB_UNLOCK        ; UNLOCK
@@ -10716,6 +10819,10 @@ LBB_NULL
 TAB_ASCO
 LBB_OFF
       .byte "FF",TK_OFF       ; OFF
+.ifdef APPLE2
+LBB_ONLINE
+      .byte "NLINE",TK_ONLINE ; ONLINE
+.endif
 LBB_ON
       .byte "N",TK_ON         ; ON
 .ifdef APPLE2
@@ -10903,6 +11010,8 @@ LAB_KEYL
       .word LBB_HPLOT         ; HPLOT
       .byte 4,'B'
       .word LBB_BEEP          ; BEEP
+      .byte 6,'O'
+      .word LBB_ONLINE        ; ONLINE
 .endif
 .endif
 

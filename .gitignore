@@ -220,4 +220,7 @@ pip-log.txt
 ehbasic
 apple2/save
 *.o
+*.SHK*
+*.po
+*.gz
 
