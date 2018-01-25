@@ -48,7 +48,8 @@ F8_CLRSCR     = $F832   ; O:AY=U,X=X      clear GR screen
 F8_CLRTOP     = $F836   ; O:AY=U,X=X      clr GR screen, mixed mode
 F8_GBASCALC   = $F847   ; O:A=V,XY=XY     A=rownum.  calculate (ZP_GBASL)
 
-; text, keyboard
+; text, keyboard, game
+F8_PREAD      = $FB1E   ; O:A=U,X=X,Y=V   I:X=0-3
 F8_INIT       = $FB2F   ; O:A=V,XY=U
 F8_BELL1      = $FBDD   ; O:A=U,X=X,Y=0
 F8_HOME       = $FC58   ; O:AY=U,X=X

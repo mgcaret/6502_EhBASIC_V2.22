@@ -528,8 +528,8 @@ TK_LEFTS          = TK_VPTR+1       ; LEFT$ token
 TK_RIGHTS         = TK_LEFTS+1      ; RIGHT$ token
 TK_MIDS           = TK_RIGHTS+1     ; MID$ token
 .ifdef APPLE2
-TK_USING          = TK_MIDS+1       ; USING$ token
-TK_GLOBAL         = TK_MIDS+1       ; GLOBAL token
+TK_USINGS         = TK_MIDS+1       ; USING$ token
+TK_GLOBAL         = TK_USINGS+1     ; GLOBAL token
 TK_PDL            = TK_GLOBAL+1     ; PDL token
 TK_BTN            = TK_PDL+1        ; BTN token
 TK_TELL           = TK_BTN+1        ; TELL token
@@ -8904,7 +8904,29 @@ LAB_HGLINE_PARMS
       LDX   Itemph
       LDA   Itempl
       RTS
+
+; *************************************
+; Sound, Text, and Joystick
+; *************************************
+LAB_PDL
+      JSR   LAB_F2FX          ; convert FAC1 to integer in Itempl/h
+      LDX   Itempl
+      JSR   F8_PREAD          ; returns value to Y reg
+      JMP   LAB_1FD0          ; convert Y to byte in FAC1 and return
       
+LAB_BTN
+      JSR   LAB_F2FX
+      LDA   Itempl
+      INC   A                 ; Because button 0=$C061
+      AND   #%00000011        ; also IIc 80/40 sw at $C060, allow BUTN(3)
+      TAX
+      LDA   #$00              ; anticipate not pressed
+      BIT   BUTN3,X
+      BMI   :++
+:     JMP   LAB_27DB          ; sign extend A and return as integer
+:     LDA   #$FF
+      BRA   :--
+           
 LAB_BEEP
       BNE   :+
       JMP   F8_BELL1
@@ -8937,7 +8959,37 @@ LAB_NORMAL
       PHY
       LDA   #$FF
       BNE   INVST
-      
+
+; *************************************
+; Error Handling & Globals
+; *************************************
+
+LAB_ERRNO
+      JSR   LAB_F2FX          ; convert FAC1 to integer in Itempl/h
+      LDA   Itempl
+      BEQ   LAB_ERRNO_LINE
+      CMP   #$04
+      BCC   :+
+      JMP   LAB_FCER
+:     DEC   A
+      TAX
+      LDY   ERRNO_BASIC,X     ; get error code
+      JMP   LAB_1FD0          ; convert Y to byte in FAC1 and return
+LAB_ERRNO_LINE
+      LDY   Clinel
+      LDA   Clineh
+      JMP   LAB_AYFC          ; save and convert integer AY to FAC1 and return
+
+; Get address of global page+offset
+LAB_GLOBAL
+      JSR   LAB_F2FX          ; convert FAC1 to integer in Itempl/h
+      LDA   Itempl
+      CLC
+      ADC   #<GLOBAL_PAGE
+      TAY
+      LDA   Itemph
+      ADC   #>GLOBAL_PAGE
+      JMP   LAB_AYFC          ; save and convert integer AY to FAC1 and return
 
 ; *************************************
 ; ProDOS Commands (except load/save)
@@ -10448,12 +10500,12 @@ LAB_FTPM    = LAB_FTPL+$01
       .word LAB_LRMS-1        ; RIGHT$()        "
       .word LAB_LRMS-1        ; MID$()          "
       .word $0000             ; USING$()
-      .word $0000             ; GLOBAL()
-      .word $0000             ; PDL()
-      .word $0000             ; BTN()
+      .word LAB_PPFN-1        ; GLOBAL()
+      .word LAB_PPFN-1        ; PDL()
+      .word LAB_PPFN-1        ; BTN()
       .word $0000             ; TELL()
       .word $0000             ; SCRN()
-      .word $0000             ; ERRNO()
+      .word LAB_PPFN-1        ; ERRNO()
       .word $0000             ; HSCRN()
 
 ; action addresses for functions
@@ -10496,12 +10548,12 @@ LAB_FTBM    = LAB_FTBL+$01
       .word LAB_RIGHT-1       ; RIGHT$()
       .word LAB_MIDS-1        ; MID$()
       .word LAB_XCER-1        ; USING$()
-      .word LAB_XCER-1        ; GLOBAL()
-      .word LAB_XCER-1        ; PDL()
-      .word LAB_XCER-1        ; BTN()
+      .word LAB_GLOBAL-1      ; GLOBAL()
+      .word LAB_PDL-1         ; PDL()
+      .word LAB_BTN-1         ; BTN()
       .word LAB_XCER-1        ; TELL()
       .word LAB_XCER-1        ; SCRN()
-      .word LAB_XCER-1        ; ERRNO()
+      .word LAB_ERRNO-1       ; ERRNO()
       .word LAB_XCER-1        ; HSCRN()
 
 ; hierarchy and action addresses for operator
@@ -10974,7 +11026,7 @@ LBB_UNTIL
       .byte "NTIL",TK_UNTIL   ; UNTIL
 .ifdef APPLE2
 LBB_USING
-      .byte "SING$(",TK_USING ; USING
+      .byte "SING$(",TK_USINGS ; USING
 .endif
 LBB_USR
       .byte "SR(",TK_USR      ; USR(
