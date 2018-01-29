@@ -367,7 +367,8 @@ TK_HCOLOR         = TK_VLIN+1       ; HCOLOR=
 TK_HPLOT          = TK_HCOLOR+1     ; HPLOT
 TK_BEEP           = TK_HPLOT+1      ; BEEP
 TK_ONLINE         = TK_BEEP+1       ; ONLINE
-TK_POP            = TK_ONLINE+1     ; POP
+TK_RENAME         = TK_ONLINE+1     ; RENAME
+TK_POP            = TK_RENAME+1     ; POP
 TK_CHTYPE         = TK_POP+1        ; CHTYPE
 TK_LOCK           = TK_CHTYPE+1     ; LOCK
 TK_UNLOCK         = TK_LOCK+1       ; UNLOCK
@@ -560,6 +561,11 @@ LAB_SKFF          = LAB_STAK+$FF
 .segment "global"
 GLOBAL_PAGE = *
 INTERP_VER        .byte $01   ; VERSION
+SYS_A             .byte $00   ; A register for SYS command
+SYS_X             .byte $00   ; X register for SYS command
+SYS_Y             .byte $00   ; Y register for SYS command
+SYS_P             .byte $00   ; P register for sys command
+SYS_BANK          .byte $00   ; 0 = main bank, 1 = aux bank
 ; these will be initialized at cold start of interp, starting at ccflag
 ; so make sure these are in order
 ccflag            .byte $00   ; see below
@@ -576,11 +582,7 @@ INPUT_HEAD        .byte $00   ; head of INPUT_BUF, $00-$7F
 INPUT_TAIL        .byte $00   ; tail of INPUT_BUF, $00-$7F. TAIL==HEAD=Empty
 ASM_BUF           .word ram_top_v+$480  ; used for catalog, etc. to assemble data
 AUTO_RUN          .byte $00   ; auto-run flag, set by run "file"
-SYS_A             .byte $00   ; A register for SYS command
-SYS_X             .byte $00   ; X register for SYS command
-SYS_Y             .byte $00   ; Y register for SYS command
-SYS_P             .byte $00   ; P register for sys command
-SYS_BANK          .byte $00   ; 0 = main bank, 1 = aux bank
+NEXT_LINE         .word 10    ; last non-empty line number entered, default to 10
 SYS_VEC           .word $0000 ; address of SYS called routine
 WS_VEC            jmp LDR_CALLBACK ; called every warm start
 ; Error codes
@@ -668,7 +670,7 @@ FILES             .byte 0,0,0,0
 ;
 START_DEV         .byte 0       ; start device
 START_FILE        .byte 0       ; nonzero if startup file present
-
+P8_LCMASK         .byte $DF     ; loader changes to $FF if P8 supports lower case
 
 .out .sprintf("Last global: %x",*-GLOBAL_PAGE)
 .align 256
@@ -762,6 +764,12 @@ LDR_START
       jsr   LDR_MOVE_BASIC
       jsr   LDR_MOVE_GLOBALS
       jsr   LDR_IO_SETUP
+      lda   P8_KVERSION
+      cmp   #$25              ; supports lower case?
+      bcc   :+                ; leave default if not
+      lda   #$FF              ; don't mask any bits
+      sta   P8_LCMASK
+:
 ; set up ProDOS global page memory map
       ldx   #$17
 :     lda   LDR_MEMTAB,x
@@ -1034,7 +1042,7 @@ LDR_MEMTAB  ; 24 bytes
 .popseg
 
 .segment "interp"
-      .org  $8A00            ; change and uncomment for easier debugging
+      .org  $8900            ; change and uncomment for easier debugging
 .else
       *=    $C000
 .endif
@@ -1581,9 +1589,20 @@ LAB_1311
 
       LDA   Itemph            ; get line # high byte
       STA   (Baslnl),Y        ; save it to program memory
+.ifdef APPLE2
+      STA   NEXT_LINE+1       ; for TAB auto-number
+.endif
       DEY                     ; decrement count
       LDA   Itempl            ; get line # low byte
       STA   (Baslnl),Y        ; save it to program memory
+.ifdef APPLE2
+      CLC
+      ADC   #10
+      STA   NEXT_LINE         ; for TAB auto-number
+      BCC   :+
+      INC   NEXT_LINE+1
+:
+.endif
       DEY                     ; decrement count
       LDA   #$FF              ; set byte to allow chain rebuild. if you didn't set this
                               ; byte then a zero already here would stop the chain rebuild
@@ -1708,6 +1727,14 @@ LAB_1359
       BNE   LAB_1374          ; branch if not empty
 
 ; next two lines ignore any non print character and [SPACE] if input buffer empty
+.ifdef APPLE2
+      CMP   #$09              ; tab key
+      BNE   :+
+      CPX   Temp3             ; X is 0 at this point
+      BNE   :+
+      JMP   LAB_AUTONUM       ; do autonumber
+:
+.endif
 
       CMP   #$21              ; compare with [SP]+1
       BCC   LAB_1359          ; if < ignore character
@@ -1735,6 +1762,34 @@ LAB_138E
       LDA   #$07              ; [BELL] character into A
       BNE   LAB_137F          ; go print the [BELL] but ignore input character
                               ; branch always
+.ifdef APPLE2
+LAB_AUTONUM
+      PHY
+      LDA   Clineh
+      INC   A
+      BNE   LAB_AUTONUM_DN    ; not immediate mode, do none of this
+      LDA   NEXT_LINE+1
+      LDY   NEXT_LINE
+      JSR   LAB_UAYFC         ; save and convert integer AY to FAC1
+      LDY   #$00              ; have to do this for unsigned conversion
+      TYA
+      JSR   LAB_297B          ; convert FAC1 to string without sign
+      LDX   #$00
+LAB_AUTONUM_LP
+      LDA   Decss+1,X
+      BEQ   :+
+      STA   Ibuffs,X
+      INX
+      JSR   LAB_PRNA          ; we won't be printing a CR, so X is safe
+      BRA   LAB_AUTONUM_LP
+:     LDA   #' '
+      STA   Ibuffs,X
+      INX
+      JSR   LAB_PRNA
+LAB_AUTONUM_DN
+      PLY
+      JMP   LAB_1359
+.endif
 
 ; crunch keywords into Basic tokens
 ; position independent buffer version ..
@@ -2010,6 +2065,11 @@ LAB_NEW
       BNE   LAB_1460          ; exit if not end of statement (to do syntax error)
 
 LAB_1463
+.ifdef APPLE2
+      LDA   #10
+      STA   NEXT_LINE
+      STZ   NEXT_LINE+1
+.endif       
       LDA   #$00              ; clear A
       TAY                     ; clear Y
       STA   (Smeml),Y         ; clear first line, next line pointer, low byte
@@ -5027,6 +5087,18 @@ LAB_AYFC
       STY   FAC1_2            ; save FAC1 mantissa2
       LDX   #$90              ; set exponent=2^16 (integer)
       JMP   LAB_27E3          ; set exp=X, clear FAC1_3, normalise and return
+
+.ifdef APPLE2
+; unsigned version of the above.  It shares 8 of 11 bytes with the above
+; but it's a wash to split out the common code.
+LAB_UAYFC
+      LSR   Dtypef            ; clear data type flag, $FF=string, $00=numeric
+      STA   FAC1_1            ; save FAC1 mantissa1
+      STY   FAC1_2            ; save FAC1 mantissa2
+      LDX   #$90              ; set exponent=2^16 (integer)
+      SEC                     ; always positive
+      JMP   LAB_STFA          ; set exp=X, clear FAC1_3, normalise and return
+.endif
 
 ; perform POS()
 
@@ -8976,8 +9048,8 @@ LAB_ERRNO
       LDY   ERRNO_BASIC,X     ; get error code
       JMP   LAB_1FD0          ; convert Y to byte in FAC1 and return
 LAB_ERRNO_LINE
-      LDY   Clinel
-      LDA   Clineh
+      LDY   Blinel            ; FIXME: temporary, error routine needs to save Clinel/h
+      LDA   Blineh
       JMP   LAB_AYFC          ; save and convert integer AY to FAC1 and return
 
 ; Get address of global page+offset
@@ -8995,6 +9067,23 @@ LAB_GLOBAL
 ; ProDOS Commands (except load/save)
 ; *************************************
 
+LAB_DELETE
+      JSR   GetPath
+      JSR   CopyPath
+      JSR   P8_Destroy
+      BCS   P8_DoError3
+      RTS
+
+LAB_RENAME
+      JSR   GetPath
+      JSR   CopyPath
+      JSR   LAB_1C01          ; scan for comma else syntax error
+      JSR   GetPath
+      JSR   CopyPath2         ; path 2 goes into reserved buffer
+      JSR   P8_Rename
+      BCS   P8_DoError3       ; file not found is fatal
+      RTS
+
 LAB_PREFIX
       BNE   LAB_PREFIX_SET    ; set prefix if arg given
       JSR   LAB_CRLF
@@ -9008,12 +9097,13 @@ LAB_PREFIX
 LAB_PREFIX_SET
       JSR   LAB_EVEX          ; evaluate string
       JSR   LAB_EVST          ; a string?  YX=ptr, A=length
-      CMP   #65               ; length OK?
+      CMP   #65               ; length OK? (prefix len is limited)
       BCC   :+
       LDX   #$1A              ; "string too long"
       JMP   LAB_XERR          ; error out
 :     JSR   CopyPath
       JSR   P8_Set_Prefix     ; Set prefix
+P8_DoError3
       BCS   P8_DoError2       ; FNF is fatal here
       RTS
       
@@ -9055,6 +9145,8 @@ LAB_ONLINE_PRVOL
       LDA   #'/'
       JSR   LAB_PRNA
       PLA
+      STZ   Itempl            ; Case bits - all as-is
+      STZ   Itemph
       JSR   CAT_DISP_NAME
 LAB_ONLINE_NEXT
       JSR   LAB_CRLF
@@ -9087,8 +9179,7 @@ LAB_CATALOG
       DEC   PathBuf           ; remove trailing /
       BMI   P8_DoPathNotFound ; If null path, no guarantee we have a path though
       BPL   :++               ; skip string eval
-:     JSR   LAB_EVEX          ; evaluate string
-      JSR   LAB_EVST          ; a string?  YX=ptr, A=length
+:     JSR   GetPath
       JSR   CopyPath
 :     JSR   P8_Get_File_Info  ; get info
       BCS   P8_DoError2       ; if file not found
@@ -9150,8 +9241,11 @@ CAT_DO_BLOCK
       STA   OSptr
       LDX   #$00              ; will count entries displayed in the block
 CAT_DO_BLOCK_LP               ; OSptr is pointing at an entry here
-      LDY   #$00              
+      LDY   #$1D              ; upper byte of case bits in this entry
+      JSR   CAT_CASEBITS      ; get the case bits
+      LDY   #$00
       LDA   (OSptr),y
+      AND   #$0F
       BEQ   :+                ; inactive entry
       PHX
       JSR   CAT_DO_ENTRY      ; display the entry
@@ -9167,17 +9261,23 @@ CAT_DO_BLOCK_LP               ; OSptr is pointing at an entry here
       CPX   OSptr2+1
       BCC   CAT_DO_BLOCK_LP   ; haven't displayed all the things yet
       RTS
-      
+
+; Enter with OSptr pointing to the start of the block.      
 CAT_HEADER
       LDY   #$04
       LDA   (OSptr),y
       AND   #$F0
       CMP   #$F0
-      BEQ   CAT_DO_HEADER     ; found volume header
+      BEQ   CAT_VOL_HEADER    ; found volume header
       CMP   #$E0              ; directory header
-      BEQ   CAT_DO_HEADER     ; found directory header
+      BEQ   CAT_DIR_HEADER    ; found directory header
       RTS                     ; something wrong, though, don't do block
-CAT_DO_HEADER
+CAT_DIR_HEADER
+      LDY   #$21              ; case bits hi byte in dir header
+      .byte $2C               ; BIT ABS
+CAT_VOL_HEADER
+      LDY   #$1B              ; case bits hi byte in vol header
+      JSR   CAT_CASEBITS
       PHA
       JSR   LAB_CRLF
       PLA
@@ -9197,6 +9297,7 @@ CAT_VOL
       JSR   LAB_PRNA
       LDA   #'/'              ; because it's a volume
 :     JSR   LAB_PRNA
+      LDY   #$04              ; because it wasn't for case bits
       LDA   (OSptr),y
       AND   #$0F
       JSR   CAT_DISP_NAME
@@ -9211,25 +9312,28 @@ CAT_VOL
       LDA   #$2B              ; First entry after header is in fixed position
       STA   OSptr
       LDX   #$01              ; already did one entry
-      BNE   CAT_DO_BLOCK_LP   ; always; get in the middle
+      JMP   CAT_DO_BLOCK_LP   ; get in the middle
 ; on entry, Y=0, A has length of file name in low nibble, (OSptr) is at entry
 ; and we can do what we want with any of the regs.
 CAT_DO_ENTRY
-      AND   #$0F
       JSR   CAT_DISP_NAME
       JSR   CAT_DISP_TYPE
       JSR   CAT_DISP_BLOCKS
       JSR   LAB_CRLF
       RTS
 ; At entry, (OSptr) points to 1 byte before name, A has length of name
-; and Y is 0.
+; and Y is 0.   Assumes case bits havd been set up in Itempl/Itemph
 CAT_DISP_NAME
       TAX
 :     INY
       LDA   (OSptr),y
+      ROL   Itempl            ; rotate case bits
+      ROL   Itemph
+      BIT   Itemph            ; Check case bit for current char
+      BPL   :+                ; as-is if case bit not set
       CMP   #' '
       BCC   :+
-      ORA   #$20
+      ORA   #$20              ; To lower
 :     JSR   LAB_PRNA
       DEX
       BNE   :--
@@ -9336,7 +9440,21 @@ CAT_DISP_BLOCKS
       BNE   :-
       LDA   #' '
       JSR   LAB_PRNA
-      RTS      
+      RTS
+
+; Get case bits at (OSptr),Y
+CAT_CASEBITS
+      STZ   Itempl
+      STZ   Itemph
+      PHA
+      LDA   (OSptr),y
+      BPL   :+                ; not case bits
+      STA   Itemph
+      DEY
+      LDA   (OSptr),y
+      STA   Itempl
+:     PLA
+      RTS
       
 LAB_ADD_OSPTR
       CLC
@@ -9856,6 +9974,58 @@ V_RESET
 
 ; *************************************    
 
+GetPath
+      JSR   LAB_EVEX          ; eval expression
+      JSR   LAB_EVST          ; eval string
+      CMP   #$80              ; max path=127 chars
+      BCS   :+
+      RTS
+:     LDA   #$1A
+      JMP   LAB_XERR          ; string too long
+
+; Copy string to pathbuf (normally $280)
+; expected: A=length, XY=pointer to string
+CopyPath
+      pha
+      sta   PathBuf           ; save length in 
+      lda   #<(PathBuf+1)
+      sta   OSptr2
+      lda   #>(PathBuf+1)
+      sta   OSptr2+1
+      pla
+; copy string of length A from XY to (OSptr2) and fix case
+Do_CopyPath
+      stx   OSptr
+      sty   OSptr+1           ; save address on zpage
+      ldy   #$00
+      sta   (OSptr2),y
+      tay                     ; now copy string to path buffer
+:     lda   (OSptr),y
+      cmp   #'a'
+      bcc   :+
+      and   P8_LCMASK         ; convert case if needed
+:     sta   (OSptr2),y
+      dey
+      bpl   :--
+      rts
+; Copy string to reserve buffer
+; expected: A=length, XY=pointer to string
+CopyPath2
+      pha
+      lda   RES_BUF
+      sta   OSptr2
+      lda   RES_BUF+1
+      sta   OSptr2+1
+      pla
+      phy
+      ldy   #$00
+      sta   (OSptr2),y
+      ply
+      inc   OSptr2
+      bne   :+
+      inc   OSptr2+1
+:     bra   Do_CopyPath
+
 ; Current file format:
 ; TYPE: $F8, aux $EBA0 (for program, $EBAx in general)
 
@@ -9895,13 +10065,7 @@ V_SAVE
       lda   #$00
 LDSV
       pha
-      jsr   LAB_EVEX          ; evaluate string
-      jsr   LAB_EVST          ; a string?  YX=ptr, A=length
-      cmp   #$7f              ; length OK?
-      bcc   LDSV_S1
-      pla                     ; clean stack, maybe not needed
-      ldx   #$1A              ; "string too long"
-      jmp   LAB_XERR          ; error out
+      jsr   GetPath
 LDSV_S1                       ; called from loader code if startup file present
       jsr   CopyPath
       jsr   P8_Get_File_Info
@@ -9989,22 +10153,6 @@ LDSV_CLOSE
       jsr   P8_Close
       rts
 
-; Copy string to pathbuf (normally $280)
-; expected: A=length, XY=pointer to string
-CopyPath
-      sta   PathBuf           ; save length in 
-      stx   OSptr
-      sty   OSptr+1           ; save address on zpage
-      tay                     ; now copy string to path buffer
-:     lda   (OSptr),y
-      cmp   #'a'
-      bcc   :+
-      and   #$DF              ; prodos paths in upper case
-:     sta   PathBuf+1,y
-      dey
-      bpl   :--
-      rts   
-
 P8_CheckErrs
       sta   ERRNO_PRODOS
       bcs   P8_IsError
@@ -10085,6 +10233,23 @@ P8_Online
       .byte $C5
       .addr PARM_Online
       bra   P8_CheckErrs
+      
+P8_Rename
+      lda   RES_BUF
+      sta   PARM_Rename+3
+      lda   RES_BUF+1
+      sta   PARM_Rename+4
+      jsr   P8_MLI
+      .byte $C2
+      .addr PARM_Rename
+P8_CheckErrs2
+      bra   P8_CheckErrs
+      
+P8_Destroy
+      jsr   P8_MLI
+      .byte $C1
+      .addr PARM_Destroy
+      bra   P8_CheckErrs2     
 
 PARM_File_Info
       .byte $0a               ; Parm count
@@ -10134,7 +10299,15 @@ PARM_Online
       .byte $02
       .byte $00               ; unit num
       .addr $0000             ; data buffer addr
+
+PARM_Rename
+      .byte $02
+      .addr PathBuf           ; old name
+      .addr PathBuf           ; new name (safe default)
       
+PARM_Destroy
+      .byte $01
+      .addr PathBuf
 
 .else
 ; these are in RAM and are set by the monitor at start-up
@@ -10386,6 +10559,7 @@ LAB_LTBL
       .word LAB_HPLOT         ; HPLOT
       .word LAB_BEEP          ; BEEP
       .word LAB_ONLINE        ; ONLINE
+      .word LAB_RENAME        ; RENAME
 ;      .word LAB_CHTYPE        ; CHTYPE
 ;      .word LAB_LOCK          ; LOCK
 ;      .word LAB_UNLOCK        ; UNLOCK
@@ -10457,7 +10631,7 @@ LAB_CTBL
       .word LAB_XCER-1        ; WRITE
       .word LAB_XCER-1        ; SEEK
       .word LAB_XCER-1        ; CREATE
-      .word LAB_XCER-1        ; DELETE
+      .word LAB_DELETE-1      ; DELETE
 .endif
 
 ; function pre process routine table
@@ -10947,6 +11121,10 @@ LBB_READ
       .byte "EAD",TK_READ     ; READ
 LBB_REM
       .byte "EM",TK_REM       ; REM
+.ifdef APPLE2
+LBB_RENAME
+      .byte "ENAME",TK_RENAME
+.endif
 LBB_RESTORE
       .byte "ESTORE",TK_RESTORE
                               ; RESTORE
@@ -11094,6 +11272,8 @@ LAB_KEYL
       .word LBB_BEEP          ; BEEP
       .byte 6,'O'
       .word LBB_ONLINE        ; ONLINE
+      .byte 6,'R'
+      .word LBB_RENAME        ; RENAME
 .endif
 .endif
 
