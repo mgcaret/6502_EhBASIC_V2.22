@@ -600,14 +600,28 @@ IO_A2_OUTP        jmp   V_OUTP_MON        ; we set firmware CSW vector to this
 ; Active default I/O info
 IO_SLOT_IN        .byte $0    ; slot * $10
 IO_SLOT_OUT       .byte $0    ; slot * $10
-; table of slot types, lower nibble is Pascal signature nibble
-; e.g. $08 = 80-column card.
-; bit 7 = special I/O
-; bit 6 = firmware was inited already
+IO_TEXT_SLOT      .byte $0    ; last text slot number
+; table of pascal slot types
 SLOT_TYPES
-                  .byte $C0   ; special
-                  .res  7,0   ; slots
-; table of slot I/O 
+                  .byte $84   ; slot 0 special
+                  .byte $00
+                  .byte $00
+                  .byte $00
+                  .byte $00
+                  .byte $00
+                  .byte $00
+                  .byte $00
+; bit 7 = inited already
+SLOT_STATUS
+                  .byte $00
+                  .byte $00
+                  .byte $00
+                  .byte $00
+                  .byte $00
+                  .byte $00
+                  .byte $00
+                  .byte $00
+; table of slot I/O addresses
 SLOT_TAB
 SL0_PINIT         .addr A2_STDIO_PINIT
 SL0_PREAD         .addr A2_STDIO_PREAD
@@ -852,7 +866,10 @@ LDR_GOBASIC
       jmp   __interp_RUN__
 
 LDR_IO_INIT:
-      jmp   (IO_PINIT)
+      lda   #$00
+      jsr   DO_VEC_SETOSLOT
+      lda   #$00
+      jmp   DO_VEC_SETISLOT
 
 ; move interpreter
 LDR_MOVE_BASIC
@@ -886,9 +903,13 @@ LDR_IO_SETUP
       sta   ZP_HGRPAGE        ; make sure hgr and friends don't do bad stuff
       lda   P8_DEVNUM
       sta   START_DEV
+      jsr   LDR_SCANSLOTS
       jsr   LDR_IO_INIT       ; init basic I/O
-      sta   SETALTCHAR
+
+      rts
+      
 ; now scan slots for Pascal 1.1 firmware cards
+LDR_SCANSLOTS
       stz   $00
       lda   #$C8              ; slot 7+1
       sta   $01
@@ -914,10 +935,6 @@ LDR_IO_SETUP
       tax                     ; slot num now in X
       ldy   #$0C
       lda   ($00),y           ; get signature byte $mn
-      lsr                     ; $m = device class
-      lsr                     ; $n = arbitrary identifier
-      lsr
-      lsr                     ; device class now in low byte
       sta   SLOT_TYPES,x      ; save to slot types table
       lda   #>GLOBAL_PAGE     ; global page high byte
       sta   gpage+1           ; into sta instruction
@@ -968,6 +985,8 @@ LDR_CALLBACK:
       lda   $02               ; that BASIC set up already
       sty   CTRL_Y+1
       sta   CTRL_Y+2
+      ldy   #<LAB_RESET
+      lda   #>LAB_RESET
       sty   SOFTEV
       sta   SOFTEV+1
       eor   #MAGIC_A5
@@ -983,8 +1002,8 @@ LDR_CALLBACK:
       sta   AUTO_RUN          ; flag interpreter to auto run loaded file
       jmp   V_LOAD_S2         ; and do it
 LDR_SMSG:
-      .byte "Enhanced BASIC 2.22p2 / 0.10",$0D
-      .byte "Apple ",$5d,$5b," port by M.G.",$0D
+      .byte "Enhanced BASIC 2.22p2 / 0.10",$0D,$0A
+      .byte "Apple ",$5d,$5b," port by M.G.",$0D,$0A
       .byte $00
 
 LDR_PARM_INFO
@@ -1042,7 +1061,7 @@ LDR_MEMTAB  ; 24 bytes
 .popseg
 
 .segment "interp"
-      .org  $8900            ; change and uncomment for easier debugging
+      .org  $8700            ; change and uncomment for easier debugging
 .else
       *=    $C000
 .endif
@@ -1467,6 +1486,8 @@ LAB_1274
       STA   NmiBase           ; clear enabled byte
 .endif
 .ifdef APPLE2
+      LDA   #'E'
+      STA   ZP_PROMPT         ; this flags no CR->CRLF translation
       JSR   WS_VEC            ; warmstart vector in global page
 .endif
       LDA   #<LAB_RMSG        ; point to "Ready" message low byte
@@ -1681,6 +1702,10 @@ LAB_134B
 ; call for BASIC input (main entry point)
 
 LAB_1357
+.ifdef APPLE2
+      LDA   #'E'
+      STA   ZP_PROMPT         ; flag no CR/LF translation
+.endif
       LDX   #$00              ; clear BASIC line buffer pointer
 .ifdef APPLE2
       STX   Temp3             ; zero max input (for right arrow support)
@@ -1691,6 +1716,7 @@ LAB_1359
       BCC   :+
       STX   Temp3             ; update max input
 :     JSR   V_INPT2           ; workaround to show cursor on 40-col
+      BCC   :-                ; if nothing
       CMP   #$7F              ; Apple //e and newer DELETE key
       BNE   :+
       LDA   #$08              ; translate to backspace
@@ -3279,13 +3305,9 @@ LAB_1866
 
 LAB_CRLF
       LDA   #$0D              ; load [CR]
-.ifdef APPLE2
-      BNE   LAB_PRNA
-.else
       JSR   LAB_PRNA          ; go print the character
       LDA   #$0A              ; load [LF]
       BNE   LAB_PRNA          ; go print the character and return, branch always
-.endif
 
 LAB_188B
       LDA   TPos              ; get terminal position
@@ -9033,6 +9055,83 @@ LAB_NORMAL
       BNE   INVST
 
 ; *************************************
+; Standard I/O (IN#/PR#)
+; *************************************
+; TODO: allow files in addition to slots
+
+LAB_PRNUM
+      JSR   LAB_GTBY          ; get byte in X
+      CPX   #$08
+      BCS   LAB_IAER2
+      LDA   SLOT_TYPES,X
+      BEQ   LAB_NDER
+      AND   #$F0
+      CMP   #$80              ; is text display?
+      BNE   :+                ; no force reinit if not
+      STX   IO_TEXT_SLOT
+      STZ   SLOT_STATUS,X
+LAB_PRNUM_BOTH
+:     TXA
+      PHX
+      JSR   DO_VEC_SETOSLOT
+      JSR   DO_VEC_PINIT
+      PLX
+      CPX   IO_TEXT_SLOT
+      BNE   :+
+      LDA   IO_SLOT_IN
+      CMP   IO_SLOT_OUT
+      BEQ   :+                ; slots are same, nothing to do
+      LSR
+      LSR
+      LSR
+      LSR
+      TAY
+      LDA   SLOT_TYPES,Y      ; get input slot type
+      AND   #$F0
+      CMP   #$80              ; text display?
+      BEQ   LAB_INNUM_BOTH    ; also force input
+:     RTS   
+
+LAB_INNUM
+      JSR   LAB_GTBY          ; get byte in X
+      CPX   #$08
+      BCS   LAB_IAER2
+      LDA   SLOT_TYPES,X
+      BEQ   LAB_NDER
+      AND   #$F0
+      CMP   #$80              ; is text display
+      BNE   :+                ; do not force re-init if not
+      STX   IO_TEXT_SLOT
+      STZ   SLOT_STATUS,X
+LAB_INNUM_BOTH
+:     TXA
+      PHX
+      JSR   DO_VEC_SETISLOT
+      JSR   DO_VEC_PINIT
+      PLX
+      CPX   IO_TEXT_SLOT
+      BNE   :+
+      LDA   IO_SLOT_OUT
+      CMP   IO_SLOT_IN
+      BEQ   :+                ; slots are same, nothing to do
+      LSR
+      LSR
+      LSR
+      LSR
+      TAY
+      LDA   SLOT_TYPES,Y      ; get output slot type
+      AND   #$F0
+      CMP   #$80              ; text display?
+      BEQ   LAB_PRNUM_BOTH    ; Yep, also set output
+:     RTS
+
+LAB_NDER
+      LDX   #$2E
+      JMP   LAB_XERR
+LAB_IAER2
+      JMP   LAB_IAER
+
+; *************************************
 ; Error Handling & Globals
 ; *************************************
 
@@ -9780,6 +9879,16 @@ LAB_CopyPage
 
 ; system dependent i/o vectors
 .ifdef APPLE2
+; RESET handling
+LAB_RESET
+      LDA   IO_TEXT_SLOT
+      TAX
+      STZ   SLOT_STATUS,X   
+      JSR   DO_VEC_SETISLOT
+      LDA   IO_TEXT_SLOT
+      JSR   DO_VEC_SETOSLOT      
+      JMP   LAB_1274          ; warm start
+
 ; Apple II I/O vectoring.  Supports Pascal 1.1 protocol cards
 
 ; non-blocking input.  TODO: do something with firmware error code
@@ -9790,6 +9899,7 @@ V_INPT
       BNE   :+
       INC   ZP_RNDH
 :     JSR   DO_VEC_IN_STATUS  ; get device status
+      LDA   #$00              ; anticipate not ready
       BCC   :+                ; cc = not ready
       JSR   DO_VEC_IN         ; get waiting char
       CPX   #$00              ; carry is set
@@ -9819,11 +9929,11 @@ V_INPT2
 V_INPT_MON
       PHA
       LDA   IO_SLOT_IN        ; slot 0?
-      BNE   :++               ; nope, do V_INPT loop
+      BNE   :+                ; nope, do V_INPT loop
       PLA
       JMP   F8_KEYIN          ; straight into F8 keyboard handler
 :     PLA
-      JSR   V_INPT            ; non-blocking input
+:     JSR   V_INPT            ; non-blocking input
       BCC   :-                ; not ready, do again
       ORA   #$80              ; set high bit
       LDY   ZP_CH             ; monitor promises to return this
@@ -9865,6 +9975,77 @@ V_OUTP_MON
       AND   #$7F              ; firmware always sends high bit set
       BRA   V_OUTP
 
+; blindly set input slot, expect basic to set A properly!
+; slot in A
+DO_VEC_SETISLOT
+      pha                     ; save slot #
+      asl
+      asl
+      asl
+      asl                     ; $s0
+      sta   IO_SLOT_IN
+      lsr
+      tax                     ; will be index into slot table
+      lda   SLOT_TAB,x        ; first word is PINIT
+      sta   IO_PINIT
+      inx
+      lda   SLOT_TAB,x
+      sta   IO_PINIT+1
+      inx                     ; now on PREAD
+      lda   SLOT_TAB,x
+      sta   IO_IN_PREAD
+      inx
+      lda   SLOT_TAB,x
+      sta   IO_IN_PREAD+1
+      inx                     ; skip PWRITE
+      inx
+      inx                     ; in favor of PSTATUS
+      lda   SLOT_TAB,x
+      sta   IO_IN_PSTATUS
+      inx
+      lda   SLOT_TAB,x
+      sta   IO_IN_PSTATUS+1
+      pla
+      bit   SLOT_STATUS,x
+      bpl   :+                ; yes, all the way into DO_VEC_SETOSLOT
+      rts
+; blindly set output slot, expect basic to set A properly!
+; slot in A
+DO_VEC_SETOSLOT
+      pha                     ; save slot #
+      asl
+      asl
+      asl
+      asl                     ; $s0
+      sta   IO_SLOT_OUT
+      lsr
+      tax                     ; will be index into slot table
+      lda   SLOT_TAB,x        ; first word is PINIT
+      sta   IO_PINIT
+      inx
+      lda   SLOT_TAB,x
+      sta   IO_PINIT+1
+      inx                     ; skip PREAD
+      inx
+      inx                     ; in favor of PWRITE
+      lda   SLOT_TAB,x
+      sta   IO_OUT_PWRITE
+      inx
+      lda   SLOT_TAB,x
+      sta   IO_OUT_PWRITE+1
+      inx                     ; now on PSTATUS
+      lda   SLOT_TAB,x
+      sta   IO_OUT_PSTATUS
+      inx
+      lda   SLOT_TAB,x
+      sta   IO_OUT_PSTATUS+1
+      pla
+      bit   SLOT_STATUS,x
+      bpl   :+
+      rts
+:     lda   #$80
+      sta   SLOT_STATUS,x
+      ; fall-through
 DO_VEC_PINIT
       lda   IO_PINIT+1
       tax
@@ -9872,24 +10053,39 @@ DO_VEC_PINIT
       asl
       asl
       tay
+      bit   $CFFF             ; SSC workaround
       jmp   (IO_PINIT)
 DO_VEC_OUT_STATUS
       ldx   IO_OUT_PSTATUS+1  ; $Cn
       ldy   IO_SLOT_OUT       ; $n0
       lda   #$00
+      bit   $CFFF             ; SSC workaround
       JMP   (IO_OUT_PSTATUS)
 DO_VEC_OUT
-      ldx   IO_OUT_PWRITE+1   ; $Cn
+      cmp   #$0d              ; is CR
+      bne   :+
+      lda   ZP_PROMPT
+      cmp   #'E'
+      php
+      lda   #$0d
+      plp
+      beq   :+                ; no translation if prompt is ours
+      jsr   :+                ; otherwise output a ctrl-d
+      lda   #$0a              ; then a linefeeed
+:     ldx   IO_OUT_PWRITE+1   ; $Cn
       ldy   IO_SLOT_OUT       ; $n0
+      bit   $CFFF             ; SSC workaround
       JMP   (IO_OUT_PWRITE)
 DO_VEC_IN_STATUS
       ldx   IO_IN_PSTATUS+1   ; $Cn
       ldy   IO_SLOT_IN        ; $n0
       lda   #$01              ; input status
+      bit   $CFFF             ; SSC workaround
       jmp   (IO_IN_PSTATUS)
 DO_VEC_IN
       ldx   IO_IN_PREAD+1     ; $Cn
       ldy   IO_SLOT_IN        ; $n0
+      bit   $CFFF             ; SSC workaround
       JMP   (IO_IN_PREAD)
 
 ; *************************************
@@ -9898,6 +10094,8 @@ DO_VEC_IN
 ; *************************************
 
 A2_STDIO_PINIT
+      sta   STORE80OFF
+      sta   CLR80VID
       jsr   F8_INIT           ; init display
       lda   #<IO_A2_INPT      ; setup firmware input vector
       sta   ZP_KSWL
@@ -9908,6 +10106,7 @@ A2_STDIO_PINIT
       lda   #>IO_A2_OUTP
       sta   ZP_CSWH      
       jsr   F8_SETNORM        ; set normal video
+      sta   SETALTCHAR        ; mousetext on
       rts
             
 A2_STDIO_PREAD
@@ -9921,10 +10120,13 @@ A2_STDIO_PWRITE
       cmp   #$0D              ; CR
       bne   :+
       jsr   F8_CLREOL         ; does not change x
+      lda   ZP_WNDLFT         ; left of window
+      sta   ZP_CH             ; go there
       txa
+      bra   A2_PW_DN
 :     cmp   #$0C              ; form-feed (clear screen)
       bne   :+
-      JSR   F8_HOME           ; does not change x
+      jsr   F8_HOME           ; does not change x
       txa
       bra   A2_PW_DN          ; and skip actual output
 :     cmp   #' '              ; always do ctrl chars the normal way
@@ -9954,7 +10156,6 @@ A2_PW_INV
       txa                     ; get unmunged char back
       bra   A2_PW_DN          ; finish up
       
-
 A2_STDIO_PSTATUS
       ora   #$00              ; set flags
       sec                     ; anticipate success
@@ -10415,7 +10616,7 @@ LAB_MSZM
 
 LAB_SMSG
 .ifdef APPLE2
-      .byte " bytes free",$0D,$0D
+      .byte " bytes free",$0D,$0A,$0A
       ; remainder of sign-on moved to loader
       ; .byte "Enhanced BASIC 2.22p2",$0D
       ; .byte "for Apple ",$5d,$5b," by M.G.",$0D,$0D
@@ -10622,8 +10823,8 @@ LAB_CTBL
       .word LAB_BYE-1         ; BYE             back to ProDOS
       .word LAB_INVERSE-1     ; INVERSE
       .word LAB_NORMAL-1      ; NORMAL
-      .word LAB_XCER-1        ; PR#
-      .word LAB_XCER-1        ; IN#
+      .word LAB_PRNUM-1       ; PR#
+      .word LAB_INNUM-1       ; IN#
       .word LAB_PREFIX-1      ; PREFIX
       .word LAB_CATALOG-1     ; CAT
       .word LAB_XCER-1        ; OPEN
@@ -11678,22 +11879,12 @@ ERR_LD      .byte "LOOP without DO",$00
 ;ERR_UA     .byte "Undimensioned array",$00
 .endif
 
-.ifdef APPLE2
-LAB_BMSG    .byte $0D,"Break",$00
-.else
 LAB_BMSG    .byte $0D,$0A,"Break",$00
-.endif
 LAB_EMSG    .byte " Error",$00
 LAB_LMSG    .byte " in line ",$00
-.ifdef APPLE2
-LAB_RMSG    .byte $0D,"Ready",$0D,$00
-LAB_IMSG    .byte " Extra ignored",$0D,$00
-LAB_REDO    .byte " Redo from start",$0D,$00
-.else
 LAB_RMSG    .byte $0D,$0A,"Ready",$0D,$0A,$00
 LAB_IMSG    .byte " Extra ignored",$0D,$0A,$00
 LAB_REDO    .byte " Redo from start",$0D,$0A,$00
-.endif
 
 .ifdef APPLE2
 FTYPES                    ; file type table

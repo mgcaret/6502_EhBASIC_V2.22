@@ -53,6 +53,7 @@ F8_PREAD      = $FB1E   ; O:A=U,X=X,Y=V   I:X=0-3
 F8_INIT       = $FB2F   ; O:A=V,XY=U
 F8_BELL1      = $FBDD   ; O:A=U,X=X,Y=0
 F8_HOME       = $FC58   ; O:AY=U,X=X
+F8_LF         = $FC66   ; 
 F8_CLREOL     = $FC9C   ; O:AY=U,X=X
 F8_WAIT       = $FCA8   ; O:A=$00,XY=XY
 F8_KEYIN      = $FD1B   ; O:A=V,X=X,Y=U
@@ -76,6 +77,7 @@ ZP_WNDBTM     = $23     ; window bottom
 ZP_CH         = $24     ; cursor horizontal
 ZP_CV         = $25     ; cursor vertical
 ZP_TXTMASK    = $32     ; $FF = Normal, $7F = Inverse, $3F = Flashing
+ZP_PROMPT     = $33
 ZP_A1         = $3C     ; monitor addresses
 ZP_A2         = $3E
 ZP_A4         = $42
