@@ -369,7 +369,8 @@ TK_BEEP           = TK_HPLOT+1      ; BEEP
 TK_ONLINE         = TK_BEEP+1       ; ONLINE
 TK_RENAME         = TK_ONLINE+1     ; RENAME
 TK_P8CALL         = TK_RENAME+1     ; P8CALL
-TK_POP            = TK_P8CALL+1     ; POP
+TK_MTEXT          = TK_P8CALL+1     ; MTEXT
+TK_POP            = TK_MTEXT+1      ; POP
 TK_CHTYPE         = TK_POP+1        ; CHTYPE
 TK_LOCK           = TK_CHTYPE+1     ; LOCK
 TK_UNLOCK         = TK_LOCK+1       ; UNLOCK
@@ -1065,7 +1066,7 @@ LDR_MEMTAB  ; 24 bytes
 .popseg
 
 .segment "interp"
-      .org  $8600            ; change and uncomment for easier debugging
+      .org  $8500            ; change and uncomment for easier debugging
 .else
       *=    $C000
 .endif
@@ -9051,16 +9052,29 @@ LAB_BEEP
       RTS
 
 LAB_INVERSE
-      PHA
-      LDA   #$7F
-INVST STA   ZP_TXTMASK
-      PLA
+      LDA   #$0F
+      .byte $2C               ; BIT ABS
+LAB_NORMAL
+      LDA   #$0E
+      JSR   LAB_PRNA          ; send to video
       RTS
       
-LAB_NORMAL
-      PHY
-      LDA   #$FF
-      BNE   INVST
+LAB_MTEXT
+      PHA
+      JSR   LAB_IGBY
+      PLA
+      CMP   #TK_ON
+      BEQ   :+
+      CMP   #TK_OFF
+      BNE   :++
+      LDA   #24
+      .byte $2C               ; BIT abs
+:     LDA   #27
+      JSR   LAB_PRNA          ; preserves a
+      LSR                     ; of the two values, one is even, the other odd
+      BCS   LAB_INVERSE       ; the even one is on
+      BCC   LAB_NORMAL        ; the odd one is off
+:     JMP   LAB_SNER
 
 ; *************************************
 ; Standard I/O (IN#/PR#)
@@ -9082,7 +9096,7 @@ LAB_PRNUM_BOTH
 :     TXA
       PHX
       JSR   DO_VEC_SETOSLOT
-      JSR   DO_VEC_PINIT
+      ; JSR   DO_VEC_PINIT
       PLX
       CPX   IO_TEXT_SLOT
       BNE   :+
@@ -9115,7 +9129,7 @@ LAB_INNUM_BOTH
 :     TXA
       PHX
       JSR   DO_VEC_SETISLOT
-      JSR   DO_VEC_PINIT
+      ; JSR   DO_VEC_PINIT
       PLX
       CPX   IO_TEXT_SLOT
       BNE   :+
@@ -10014,12 +10028,15 @@ LAB_CopyPage
 .ifdef APPLE2
 ; RESET handling
 LAB_RESET
-      LDA   IO_TEXT_SLOT
-      TAX
-      STZ   SLOT_STATUS,X   
+      LDX   #7                ; force reinit of all slots
+:     STZ   SLOT_STATUS,X
+      DEX
+      BPL   :-
+      LDA   IO_TEXT_SLOT      ; redirect I/O to last $8x-type device
       JSR   DO_VEC_SETISLOT
       LDA   IO_TEXT_SLOT
-      JSR   DO_VEC_SETOSLOT      
+      JSR   DO_VEC_SETOSLOT  
+      ; JSR   DO_VEC_PINIT      ; reinit text I/O    
       JMP   LAB_1274          ; warm start
 
 ; Apple II I/O vectoring.  Supports Pascal 1.1 protocol cards
@@ -10138,10 +10155,7 @@ DO_VEC_SETISLOT
       inx
       lda   SLOT_TAB,x
       sta   IO_IN_PSTATUS+1
-      pla
-      bit   SLOT_STATUS,x
-      bpl   :+                ; yes, all the way into DO_VEC_SETOSLOT
-      rts
+      bra   :+                ; yes, all the way into DO_VEC_SETOSLOT
 ; blindly set output slot, expect basic to set A properly!
 ; slot in A
 DO_VEC_SETOSLOT
@@ -10172,7 +10186,7 @@ DO_VEC_SETOSLOT
       inx
       lda   SLOT_TAB,x
       sta   IO_OUT_PSTATUS+1
-      pla
+:     plx
       bit   SLOT_STATUS,x
       bpl   :+
       rts
@@ -10249,28 +10263,20 @@ A2_STDIO_PREAD
 :     rts
 
 A2_STDIO_PWRITE
+      bra   A2_PW_NOGOTOXY    ; will modify
+A2_PW_NOGOTOXY
       tax                     ; save it
-      cmp   #$0D              ; CR
-      bne   :+
-      jsr   F8_CLREOL         ; does not change x
-      lda   ZP_WNDLFT         ; left of window
-      sta   ZP_CH             ; go there
-      txa
-      bra   A2_PW_DN
-:     cmp   #$0C              ; form-feed (clear screen)
-      bne   :+
-      jsr   F8_HOME           ; does not change x
-      txa
-      bra   A2_PW_DN          ; and skip actual output
-:     cmp   #' '              ; always do ctrl chars the normal way
-      bcc   :+
+      cmp   #' '
+      bcc   A2_PW_CTRL
       bit   ZP_TXTMASK        ; check inverse
       bpl   A2_PW_INV
-:     eor   #$80              ; make apple II char
+A2_PW_NOINV
+      eor   #$80              ; make apple II char
       jsr   F8_COUT1          ; write to screen, preserves a
       eor   #$80              ; back to EhBASIC char
 A2_PW_DN
       ldx   #$00              ; pascal firmware error code
+A2_PW_NOP
       rts
 A2_PW_INV
       lda   ZP_TXTMASK        ; current char output mask
@@ -10278,6 +10284,8 @@ A2_PW_INV
       lda   #$ff
       sta   ZP_TXTMASK        ; tell COUT1 not to mess with it
       txa                     ; get our char back
+      bit   SLOT_STATUS+0     ; check moustext flag
+      bvs   :+                ; head straight over if so
       cmp   #'`'              ; lower-case-ish?
       bcs   :+                ; don't munge it
       cmp   #'@'              ; digit-ish?
@@ -10288,6 +10296,96 @@ A2_PW_INV
       sta   ZP_TXTMASK        ; put it back
       txa                     ; get unmunged char back
       bra   A2_PW_DN          ; finish up
+A2_PW_CTRL
+      cmp   #$06              ; avoid having 12 bytes wasted on NOPs
+      bcc   A2_PW_DN
+      pha                     ; save A so we can get jump table offset
+      asl
+      tax                     ; and put in X
+      pla                     ; get A and save again because some routines
+      pha                     ; use the firmware
+      jsr   A2_PW_DOCTRL      ; perform action
+      pla                     ; get char back
+      bra   A2_PW_DN
+A2_PW_DOCTRL
+      jmp   (A2_PW_CTRLTAB-(6*2),x)
+A2_PW_GOTOXY
+      lda   #A2_PW_GOTOXYH-A2_PW_NOGOTOXY
+A2_PW_SETGOTO
+      sta   A2_STDIO_PWRITE+1 ; tell routine to do horizontal position
+      rts
+A2_PW_GOTOXYH
+      sec
+      sbc   #32
+      sta   ZP_CH
+      lda   #A2_PW_GOTOXYV-A2_PW_NOGOTOXY
+      bra   A2_PW_SETGOTO
+A2_PW_GOTOXYV
+      sec
+      sbc   #32
+      jsr   F8_TABV
+      stz   A2_STDIO_PWRITE+1 ; tell routine to do normal action
+      rts
+A2_PW_CTRLTAB
+      .addr A2_PW_NOP         ; $06 - cursor on, not supported
+      .addr A2_PW_NOINV       ; $07 - bell
+      .addr A2_PW_NOINV       ; $08 - backspace/left arrow
+      .addr A2_PW_NOP         ; $09 - tab - TODO
+      .addr A2_PW_NOINV       ; $0A - cursor down (line feed)
+      .addr F8_CLREOP         ; $0B - clear to end of screen
+      .addr F8_HOME           ; $0C - home
+      .addr A2_PW_CR          ; $0D - CR
+      .addr F8_SETNORM        ; $0E - inverse
+      .addr F8_SETINV         ; $0F - normal
+      .addr A2_PW_NOP         ; $10 - none
+      .addr A2_PW_NOP         ; $11 - none
+      .addr A2_PW_NOP         ; $12 - none
+      .addr A2_PW_NOP         ; $13 - none
+      .addr A2_PW_NOP         ; $14 - none
+      .addr A2_PW_NOP         ; $15 - none
+      .addr A2_PW_NOP         ; $16 - scroll down - clear top line - TODO
+      .addr F8_SCROLL         ; $17 - scroll up
+      .addr A2_PW_MTOFF       ; $18 - mousetext off
+      .addr A2_PW_GOTO00      ; $19 - go to 0,0
+      .addr A2_PW_CLRLN       ; $1A - clear entire line
+      .addr A2_PW_MTON        ; $1B - mousetext on
+      .addr A2_PW_ADVANCE     ; $1C - move right, wrap to 0
+      .addr F8_CLREOL         ; $1D - Clear to end of line
+      .addr A2_PW_GOTOXY      ; $1E - Goto XY
+      .addr F8_UP             ; $1F - cursor up
+A2_PW_CR
+      lda   ZP_WNDLFT         ; left of window
+      sta   ZP_CH             ; go there
+      rts
+A2_PW_MTON
+      lda   #%01000000
+      tsb   SLOT_STATUS+0
+      rts
+A2_PW_MTOFF
+      lda   #%01000000
+      trb   SLOT_STATUS+0
+      rts
+A2_PW_GOTO00
+      lda   #$00
+      sta   ZP_CH
+      jmp   F8_TABV
+A2_PW_CLRLN
+      lda   ZP_CH
+      pha
+      stz   ZP_CH
+      jsr   F8_CLREOL
+      pla
+      sta   ZP_CH
+      rts
+A2_PW_ADVANCE
+      inc   ZP_CH
+      lda   ZP_CH
+      cmp   ZP_WNDWDTH
+      bcc   :+
+      stz   ZP_CH
+:     rts
+      
+
       
 A2_STDIO_PSTATUS
       ora   #$00              ; set flags
@@ -10895,6 +10993,7 @@ LAB_LTBL
       .word LAB_ONLINE        ; ONLINE
       .word LAB_RENAME        ; RENAME
       .word LAB_P8CALL        ; P8CALL
+      .word LAB_MTEXT         ; MTEXT
 ;      .word LAB_CHTYPE        ; CHTYPE
 ;      .word LAB_LOCK          ; LOCK
 ;      .word LAB_UNLOCK        ; UNLOCK
@@ -11394,6 +11493,10 @@ LBB_MIDS
       .byte "ID$(",TK_MIDS    ; MID$(
 LBB_MIN
       .byte "IN(",TK_MIN      ; MIN(
+.ifdef APPLE2
+LBB_MTEXT
+      .byte "TEXT",TK_MTEXT   ; MTEXT
+.endif
       .byte $00
 TAB_ASCN
 LBB_NEW
@@ -11621,6 +11724,8 @@ LAB_KEYL
       .word LBB_RENAME        ; RENAME
       .byte 6,'P'
       .word LBB_P8CALL        ; P8CALL
+      .byte 5,'M'
+      .word LBB_MTEXT         ; MTEXT
 .endif
 .endif
 

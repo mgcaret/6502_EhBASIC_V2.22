@@ -47,14 +47,20 @@ F8_VLINE      = $F828   ; O:AY=U,X=X      I:Y,A = XY start, ZP_V2 = end row
 F8_CLRSCR     = $F832   ; O:AY=U,X=X      clear GR screen
 F8_CLRTOP     = $F836   ; O:AY=U,X=X      clr GR screen, mixed mode
 F8_GBASCALC   = $F847   ; O:A=V,XY=XY     A=rownum.  calculate (ZP_GBASL)
+F8_SCRN       = $F871   ; 
 
 ; text, keyboard, game
 F8_PREAD      = $FB1E   ; O:A=U,X=X,Y=V   I:X=0-3
 F8_INIT       = $FB2F   ; O:A=V,XY=U
+F8_TABV       = $FB5B   ;
+F8_ADVANCE    = $FBF4   ; 
 F8_BELL1      = $FBDD   ; O:A=U,X=X,Y=0
+F8_CLREOP     = $FC42
 F8_HOME       = $FC58   ; O:AY=U,X=X
 F8_LF         = $FC66   ; 
+F8_SCROLL     = $FC70   ; 
 F8_CLREOL     = $FC9C   ; O:AY=U,X=X
+F8_UP         = $FC1A
 F8_WAIT       = $FCA8   ; O:A=$00,XY=XY
 F8_KEYIN      = $FD1B   ; O:A=V,X=X,Y=U
 F8_COUT1      = $FDF0   ; O:AXY=AXY
