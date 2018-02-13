@@ -1,0 +1,57 @@
+31231
+
+EHBASIC ProDOS & other I/O notes
+
+PR#1/IN#1 - pascal proto
+PR#1!/IN#1! - BASIC protocol
+PR#An[,o]/IN#An[,o] = I/O to routine, o = status call, routine to start with CLD
+
+FILEBUF(0) = # of file buffers
+FILEBUF(n) = address of file buffer n, or 0 if in use
+
+CAT
+CATALOG
+FILES  (name & type only, in columns)
+ONLINE - list volumes
+
+
+PREFIX d[,s]
+PREFIX "path"
+PREFIX <none> - output current
+
+X$ = PREFIX$
+
+OPEN <logical file number>,"path"[,<eol char>]
+OPEN <logical file number>,#n     open slot
+
+CLOSE <lfn>
+CLOSE 0 = close all
+
+X$ = READ(<lfn>[,bytes]) bytes will default to 128
+
+WRITE <lfn>,value, ....
+
+FLUSH <lfn>
+
+SEEK <lfn>,<post>
+APPEND <lfn>
+
+x = TELL(lfn)
+
+EOF <lfn>,<pos>
+X=EOF?(lfn)
+
+P8CALL <call_num>,<string>
+
+
+
+
+
+
+others:
+INPUT #<lfn>, ...
+temp redirect input from filenum until end of input statement
+
+PRINT #<lfn>, ...
+temp redirect output to filenum until end of print statement
+

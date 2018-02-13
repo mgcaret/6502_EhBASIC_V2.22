@@ -368,7 +368,8 @@ TK_HPLOT          = TK_HCOLOR+1     ; HPLOT
 TK_BEEP           = TK_HPLOT+1      ; BEEP
 TK_ONLINE         = TK_BEEP+1       ; ONLINE
 TK_RENAME         = TK_ONLINE+1     ; RENAME
-TK_POP            = TK_RENAME+1     ; POP
+TK_P8CALL         = TK_RENAME+1     ; P8CALL
+TK_POP            = TK_P8CALL+1     ; POP
 TK_CHTYPE         = TK_POP+1        ; CHTYPE
 TK_LOCK           = TK_CHTYPE+1     ; LOCK
 TK_UNLOCK         = TK_LOCK+1       ; UNLOCK
@@ -536,11 +537,14 @@ TK_BTN            = TK_PDL+1        ; BTN token
 TK_TELL           = TK_BTN+1        ; TELL token
 TK_SCRN           = TK_TELL+1       ; SCRN token
 TK_ERRNO          = TK_SCRN+1       ; ERRNO token
-; TK_PREFIXS      = TK_ERRNO+1      ; PREFIX$ token, cf. TK_PREFIX
+TK_P2BS           = TK_ERRNO+1      ; P2B$( token Pascal Str to BASIC str
+TK_B2PS           = TK_P2BS+1       ; B2P$( token Basic Str to Pascal str
+; TK_PREFIXS      = TK_B2PS+1       ; PREFIX$ token, cf. TK_PREFIX
 ; TK_READF        = TK_PREFIXS+1    ; READ( token, cf. TK_READ
-TK_HSCRN          = TK_ERRNO+1      ; HSCRN token
+TK_HSCRN          = TK_B2PS+1       ; HSCRN token
+TK_EXT            = $FF             ; extended tokens
 
-.out .sprintf("Highest token #: %x",TK_HSCRN)
+.out .sprintf("Highest token #: %x",TK_HSCRN) ; better be $FE or less
 .endif
 
 ; offsets from a base of X or Y
@@ -1061,7 +1065,7 @@ LDR_MEMTAB  ; 24 bytes
 .popseg
 
 .segment "interp"
-      .org  $8700            ; change and uncomment for easier debugging
+      .org  $8600            ; change and uncomment for easier debugging
 .else
       *=    $C000
 .endif
@@ -5806,8 +5810,12 @@ LAB_22FB
 
 LAB_CHRS
       JSR   LAB_EVBY          ; evaluate byte expression, result in X
+.ifdef APPLE2
+      PHX                     ; 65C02
+.else
       TXA                     ; copy to A
       PHA                     ; save character
+.endif
       LDA   #$01              ; string is single byte
       JSR   LAB_MSSP          ; make string space A bytes long A=$AC=length,
                               ; X=$AD=Sutill=ptr low byte, Y=$AE=Sutilh=ptr high byte
@@ -9132,6 +9140,114 @@ LAB_IAER2
       JMP   LAB_IAER
 
 ; *************************************
+; Pascal <-> BASIC String Conversion
+; *************************************
+
+; P2B$(string or addr, mask, shift)
+LAB_P2BS
+      JSR   LAB_IGBY          ; scan run stream
+      JSR   LAB_EVEX          ; evaluate expression
+      BIT   Dtypef
+      BMI   P2BS_STR
+      JSR   LAB_F2FX          ; numeric -> integer at Itempl,Itemph
+      BRA   :+     
+P2BS_STR
+      JSR   LAB_EVST          ; YX=ptr, A=length
+      STY   Itemph
+      STX   Itempl
+:     LDY   #$00
+      LDA   (Itempl),y        ; get length of pascal str
+      PHA                     ; save it
+      INC   Itempl            ; and skip past
+      BNE   :+
+      INC   Itemph
+:     JSR   LAB_GBYT          ; get next byte
+      CMP   #')'
+      BEQ   P2BS_COPY
+      JSR   LAB_1C01          ; comma or syntax error
+      JSR   LAB_GTBY          ; get byte param in x (mask)
+      STX   Temp3             ; save mask
+      PLA                     ; get length back
+      AND   Temp3             ; mask it
+      PHA                     ; and save it back to stack
+      JSR   LAB_GBYT
+      CMP   #')'
+      BEQ   P2BS_COPY
+      JSR   LAB_1C01
+      JSR   LAB_GTBY          ; get byte param in x (shift)
+      PLA
+:     DEX                     ; shift loop
+      BMI   :+
+      LSR
+      BNE   :-
+:     PHA
+P2BS_COPY
+      JSR LAB_GBYT
+      CMP   #')'
+      BEQ   :+
+P2BS_SNER
+      JMP   LAB_SNER
+:     JSR   LAB_IGBY          ; skip ')'
+      PLA
+      JSR   LAB_MSSP          ; make string space A bytes long, ptr in sutill/h
+      LDY   Itemph
+      LDX   Itempl
+      JSR   LAB_2298          ; copy A bytes from YX to (Sutill)
+      JMP   LAB_RTST          ; return the string
+
+; B2P$(string, shift, or)
+LAB_B2PS
+      JSR   LAB_IGBY          ; scan run stream
+      JSR   LAB_EVEX          ; evaluate expression
+      JSR   LAB_EVST          ; YX=ptr, A=length
+      PHA                     ; save len
+      DEX
+      BNE   :+
+      DEY
+:     STY   Itemph            ; save src - 1 for now
+      STX   Itempl
+      INC   A                 ; destination length + 1
+      BNE   :+                ; if not too long
+      LDX   #$1C              ; otherwise string too complex
+      JMP   LAB_XERR
+:     JSR   LAB_MSSP          ; make a string A size (str_pl)=(Sutill)
+      LDY   Itemph
+      LDX   Itempl
+      JSR   LAB_2298          ; copy A bytes from YX to (Sutill)
+      PLA                     ; original length
+      LDY   #$00
+      STA   (str_pl),y        ; save length
+:     JSR   LAB_GBYT          ; get next byte
+      CMP   #')'
+      BEQ   P2BS_DONE
+      JSR   LAB_1C01          ; comma or syntax error
+      JSR   LAB_GTBY          ; get byte param in x (mask)
+:     STX   Temp3             ; save mask
+      LDY   #$00
+      LDA   (str_pl),y
+      DEX
+      BMI   :+
+      ASL                     ; perform shift of of length byte
+      BNE   :-
+:     STA   (str_pl),y
+      JSR   LAB_GBYT
+      CMP   #')'
+      BEQ   P2BS_DONE
+      JSR   LAB_1C01
+      JSR   LAB_GTBY          ; get byte param in x (shift)
+      TXA
+      LDY   #$00
+      ORA   (str_pl),y
+      STA   (str_pl),y
+      JSR   LAB_GBYT
+      CMP   #')'
+      BEQ   P2BS_DONE
+      JMP   LAB_SNER
+P2BS_DONE
+      JSR   LAB_IGBY          ; skip ')'
+      JMP   LAB_RTST          ; return the string
+
+; *************************************
 ; Error Handling & Globals
 ; *************************************
 
@@ -9165,6 +9281,23 @@ LAB_GLOBAL
 ; *************************************
 ; ProDOS Commands (except load/save)
 ; *************************************
+
+LAB_P8CALL
+      JSR   LAB_GTBY          ; get byte in X
+      STX   :+                ; put in P8 MLI call
+      JSR   LAB_1C01          ; scan for "," or syntax error
+      JSR   LAB_EVNM          ; eval numeric expression
+      JSR   LAB_F2FX          ; convert to temporary integer
+      LDA   Itemph            ; now get it and put into parameter list addr
+      STA   :++ +1
+      LDA   Itempl
+      STA   :++
+      JSR   P8_MLI            ; call ProDOS!
+:     .byte $00
+:     .word $0000
+      JSR   P8_CheckErrs
+      BCS   P8_DoError3       ; all errors fail
+      RTS
 
 LAB_DELETE
       JSR   GetPath
@@ -10761,6 +10894,7 @@ LAB_LTBL
       .word LAB_BEEP          ; BEEP
       .word LAB_ONLINE        ; ONLINE
       .word LAB_RENAME        ; RENAME
+      .word LAB_P8CALL        ; P8CALL
 ;      .word LAB_CHTYPE        ; CHTYPE
 ;      .word LAB_LOCK          ; LOCK
 ;      .word LAB_UNLOCK        ; UNLOCK
@@ -10881,6 +11015,8 @@ LAB_FTPM    = LAB_FTPL+$01
       .word $0000             ; TELL()
       .word $0000             ; SCRN()
       .word LAB_PPFN-1        ; ERRNO()
+      .word $0000             ; P2B$()
+      .word $0000             ; B2P$()
       .word $0000             ; HSCRN()
 
 ; action addresses for functions
@@ -10929,6 +11065,8 @@ LAB_FTBM    = LAB_FTBL+$01
       .word LAB_XCER-1        ; TELL()
       .word LAB_XCER-1        ; SCRN()
       .word LAB_ERRNO-1       ; ERRNO()
+      .word LAB_P2BS-1        ; P2B$()
+      .word LAB_B2PS-1        ; B2P$()
       .word LAB_XCER-1        ; HSCRN()
 
 ; hierarchy and action addresses for operator
@@ -11075,6 +11213,8 @@ LBB_AT
       .byte $00
 TAB_ASCB
 .ifdef APPLE2
+LBB_B2PS
+      .byte "2P$(",TK_B2PS    ; B2P$(
 LBB_BEEP
       .byte "EEP",TK_BEEP     ; BEEP
 .endif
@@ -11291,6 +11431,10 @@ LBB_OR
       .byte $00
 TAB_ASCP
 .ifdef APPLE2
+LBB_P2BS
+      .byte "2B$(",TK_P2BS    ; P2B$(
+LBB_P8CALL
+      .byte "8CALL",TK_P8CALL ; P8CALL
 LBB_PDL
       .byte "DL(",TK_PDL      ; PDL(
 .endif
@@ -11475,6 +11619,8 @@ LAB_KEYL
       .word LBB_ONLINE        ; ONLINE
       .byte 6,'R'
       .word LBB_RENAME        ; RENAME
+      .byte 6,'P'
+      .word LBB_P8CALL        ; P8CALL
 .endif
 .endif
 
@@ -11744,6 +11890,10 @@ LAB_KEYT
       .word LBB_TELL          ; TELL
       .byte 6,'E'
       .word LBB_ERRNO         ; ERRNO
+      .byte 5,'P'
+      .word LBB_P2BS          ; P2B$(
+      .byte 5,'B'
+      .word LBB_B2PS          ; P2B$(
       .byte 6,'H'
       .word LBB_HSCRN         ; HSCRN
 .endif

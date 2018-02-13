@@ -20,7 +20,7 @@ shk: EHBASIC.SHK
 
 EHBASIC.SHK: ehbasic
 	cp -f ehbasic 'EHBASIC#FF0000'
-	nulib2 -au EHBASIC.SHK 'EHBASIC#FF0000'
+	nulib2 -aue EHBASIC.SHK 'EHBASIC#FF0000'
 	rm -f 'EHBASIC#FF0000'
 
 ehbasic: ehbasic.o ehbasic.l
