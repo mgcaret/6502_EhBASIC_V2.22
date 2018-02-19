@@ -3305,6 +3305,10 @@ LAB_1866
       STA   Ibuffs,X          ; null terminate input
       LDX   #<Ibuffs          ; set X to buffer start-1 low byte
       LDY   #>Ibuffs          ; set Y to buffer start-1 high byte
+.ifdef APPLE2
+      LDA   #$1D              ; clear to end of line
+      JSR   LAB_PRNA
+.endif
 
 ; print CR/LF
 
@@ -9064,36 +9068,51 @@ LAB_MTEXT
       JSR   LAB_IGBY
       PLA
       CMP   #TK_ON
-      BEQ   :+
+      BEQ   LAB_MTON
       CMP   #TK_OFF
-      BNE   :++
+      BEQ   LAB_MTOFF
+      JMP   LAB_SNER
+LAB_MTOFF
       LDA   #24
       .byte $2C               ; BIT abs
-:     LDA   #27
+LAB_MTON
+      LDA   #27
       JSR   LAB_PRNA          ; preserves a
       LSR                     ; of the two values, one is even, the other odd
       BCS   LAB_INVERSE       ; the even one is on
       BCC   LAB_NORMAL        ; the odd one is off
-:     JMP   LAB_SNER
 
 ; *************************************
 ; Standard I/O (IN#/PR#)
 ; *************************************
 ; TODO: allow files in addition to slots
 
-LAB_PRNUM
+; get slot number in X from the form <#>[!]
+; if ! is present, forces device to be re-initialized
+; if devices is a $8x type, set last text slot to the number
+; and force re-init
+LAB_GETSLNUM
       JSR   LAB_GTBY          ; get byte in X
       CPX   #$08
       BCS   LAB_IAER2
-      LDA   SLOT_TYPES,X
+      JSR   LAB_GBYT          ; next token in run stream
+      CMP   #'!'              ; is bang?
+      BNE   :+
+      JSR   LAB_IGBY          ; skip bang
+      STZ   SLOT_STATUS,X     ; force reinit (assuming device there)
+:     LDA   SLOT_TYPES,X
       BEQ   LAB_NDER
       AND   #$F0
       CMP   #$80              ; is text display?
       BNE   :+                ; no force reinit if not
       STX   IO_TEXT_SLOT
       STZ   SLOT_STATUS,X
+:     RTS
+
+LAB_PRNUM
+      JSR   LAB_GETSLNUM
 LAB_PRNUM_BOTH
-:     TXA
+      TXA
       PHX
       JSR   DO_VEC_SETOSLOT
       ; JSR   DO_VEC_PINIT
@@ -9115,18 +9134,9 @@ LAB_PRNUM_BOTH
 :     RTS   
 
 LAB_INNUM
-      JSR   LAB_GTBY          ; get byte in X
-      CPX   #$08
-      BCS   LAB_IAER2
-      LDA   SLOT_TYPES,X
-      BEQ   LAB_NDER
-      AND   #$F0
-      CMP   #$80              ; is text display
-      BNE   :+                ; do not force re-init if not
-      STX   IO_TEXT_SLOT
-      STZ   SLOT_STATUS,X
+      JSR   LAB_GETSLNUM
 LAB_INNUM_BOTH
-:     TXA
+      TXA
       PHX
       JSR   DO_VEC_SETISLOT
       ; JSR   DO_VEC_PINIT
@@ -9231,7 +9241,7 @@ LAB_B2PS
       PLA                     ; original length
       LDY   #$00
       STA   (str_pl),y        ; save length
-:     JSR   LAB_GBYT          ; get next byte
+      JSR   LAB_GBYT          ; get next byte
       CMP   #')'
       BEQ   P2BS_DONE
       JSR   LAB_1C01          ; comma or syntax error
@@ -9510,6 +9520,7 @@ CAT_DO_BLOCK_LP               ; OSptr is pointing at an entry here
 
 ; Enter with OSptr pointing to the start of the block.      
 CAT_HEADER
+      JSR   LAB_CRLF
       LDY   #$04
       LDA   (OSptr),y
       AND   #$F0
@@ -9520,34 +9531,23 @@ CAT_HEADER
       RTS                     ; something wrong, though, don't do block
 CAT_DIR_HEADER
       LDY   #$21              ; case bits hi byte in dir header
-      .byte $2C               ; BIT ABS
+      JSR   CAT_CASEBITS
+      LDA   #<LAB_FOLDER
+      LDY   #>LAB_FOLDER
+      JSR   LAB_18C3          ; print folder symbol
+      BRA   :+      
 CAT_VOL_HEADER
       LDY   #$1B              ; case bits hi byte in vol header
       JSR   CAT_CASEBITS
-      PHA
-      JSR   LAB_CRLF
-      PLA
-      CMP   #$F0
-      BEQ   CAT_VOL           ; go do volume mousetext
-      JSR   LAB_CRLF          ; else it's a subdir, do folder mousetext
-      LDA   #216
-      JSR   LAB_PRNA
-      LDA   #217
-      JSR   LAB_PRNA
-      LDA   #' '
-      BNE   :+
-CAT_VOL
-      LDA   #193              ; open-apple MT
-      JSR   LAB_PRNA
-      LDA   #' '
-      JSR   LAB_PRNA
-      LDA   #'/'              ; because it's a volume
-:     JSR   LAB_PRNA
-      LDY   #$04              ; because it wasn't for case bits
+      LDA   #<LAB_VOLUME
+      LDY   #>LAB_VOLUME
+      JSR   LAB_18C3          ; print apple-space-slash
+:     LDY   #$04
       LDA   (OSptr),y
       AND   #$0F
       JSR   CAT_DISP_NAME
-      JSR   LAB_CRLF
+      LDA   #$0A              ; this works around stupid
+      JSR   LAB_PRNA          ; 80-col bug
       JSR   LAB_CRLF
       LDY   #$23
       LDA   (OSptr),y         ; entry_length
@@ -10335,8 +10335,8 @@ A2_PW_CTRLTAB
       .addr F8_CLREOP         ; $0B - clear to end of screen
       .addr F8_HOME           ; $0C - home
       .addr A2_PW_CR          ; $0D - CR
-      .addr F8_SETNORM        ; $0E - inverse
-      .addr F8_SETINV         ; $0F - normal
+      .addr F8_SETNORM        ; $0E - normal
+      .addr F8_SETINV         ; $0F - inverse
       .addr A2_PW_NOP         ; $10 - none
       .addr A2_PW_NOP         ; $11 - none
       .addr A2_PW_NOP         ; $12 - none
@@ -12162,5 +12162,10 @@ FTYPES                    ; file type table
       .byte $FE,"rel"     ; Relocatable code
       .byte $FF,"sys"     ; P8 system file
       .byte $00           ; end of list
+      
+LAB_FOLDER
+      .byte $1B,$0F,"XY",$0E,$18,' ',$00
+LAB_VOLUME
+      .byte $1B,$0F,'A',$0E,$18," /",$00
 .endif
 AA_end_basic
