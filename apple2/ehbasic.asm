@@ -9519,9 +9519,6 @@ P8_DoError2
       JMP   P8_DoError
       
 LAB_CATALOG
-      PHA
-      PHX
-      PHY
       BNE   :+                ; arg given
       JSR   P8_Get_Prefix
       DEC   PathBuf           ; remove trailing /
@@ -9574,9 +9571,6 @@ CAT_DONE
       PLY   ; buffer number
       JSR   LAB_FREEBUF
       JSR   P8_Close
-      PLY
-      PLX
-      PLA
       RTS
 CAT_NO_BUFFERS
       JSR   P8_Close
