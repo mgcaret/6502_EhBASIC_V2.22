@@ -370,7 +370,8 @@ TK_ONLINE         = TK_BEEP+1       ; ONLINE
 TK_RENAME         = TK_ONLINE+1     ; RENAME
 TK_P8CALL         = TK_RENAME+1     ; P8CALL
 TK_MTEXT          = TK_P8CALL+1     ; MTEXT
-TK_POP            = TK_MTEXT+1      ; POP
+TK_TRY            = TK_MTEXT+1      ; TRY
+TK_POP            = TK_TRY+1        ; POP
 TK_CHTYPE         = TK_POP+1        ; CHTYPE
 TK_LOCK           = TK_CHTYPE+1     ; LOCK
 TK_UNLOCK         = TK_LOCK+1       ; UNLOCK
@@ -590,10 +591,13 @@ AUTO_RUN          .byte $00   ; auto-run flag, set by run "file"
 NEXT_LINE         .word 10    ; last non-empty line number entered, default to 10
 SYS_VEC           .word $0000 ; address of SYS called routine
 WS_VEC            jmp LDR_CALLBACK ; called every warm start
-; Error codes
+; Error codes & handling
+ERRNO_LINE        .word $0000 ; line of last BASIC error
 ERRNO_BASIC       .byte $00   ; last BASIC error code
 ERRNO_PASCAL_IO   .byte $00   ; last PASCAL I/O error code
 ERRNO_PRODOS      .byte $00   ; last PRODOS error code
+TRY_STATUS        .byte $00   ; status of TRY, high bit set = active
+TRY_SP            .byte $00   ; stack pointer of active TRY
 ; Active Pascal I/O vectors
 IO_PINIT          .addr A2_STDIO_PINIT    ; only used when initing
 IO_IN_PREAD       .addr A2_STDIO_PREAD
@@ -1450,7 +1454,17 @@ LAB_OMER
 LAB_XERR
 .ifdef APPLE2
       STZ   AUTO_RUN          ; prevent auto-run
-      STX   ERRNO_BASIC       ; save error number
+      LDA   Clinel            ; save line number
+      STA   ERRNO_LINE
+      LDA   Clineh
+      STA   ERRNO_LINE+1
+      TXA
+      LSR
+      STA   ERRNO_BASIC       ; save error number / 2
+      BIT   TRY_STATUS
+      BPL   :+                ; branch if no TRY active
+      JMP   LAB_CATCH         ; otherwise catch error
+:
 .endif
       JSR   LAB_CRLF          ; print CR/LF
 
@@ -1484,13 +1498,14 @@ LAB_1269
 ; wait for Basic command
 
 LAB_1274
+.ifndef NO_INT
                               ; clear ON IRQ/NMI bytes
       LDA   #$00              ; clear A
-.ifndef NO_INT
       STA   IrqBase           ; clear enabled byte
       STA   NmiBase           ; clear enabled byte
 .endif
 .ifdef APPLE2
+      STZ   TRY_STATUS        ; clear TRY status on all warm starts
       LDA   #'E'
       STA   ZP_PROMPT         ; this flags no CR->CRLF translation
       JSR   WS_VEC            ; warmstart vector in global page
@@ -2902,6 +2917,9 @@ LAB_172D
 
 LAB_IF
       JSR   LAB_EVEX          ; evaluate the expression
+.ifdef APPLE2
+LAB_TRYTHEN
+.endif
       JSR   LAB_GBYT          ; scan memory
       CMP   #TK_THEN          ; compare with THEN token
       BEQ   LAB_174B          ; if it was THEN go do IF
@@ -2941,7 +2959,6 @@ LAB_174G
 
 ; the IF was executed and there may be a following ELSE so the code needs to return
 ; here to check and ignore the ELSE if present
-
       LDY   #$00              ; clear the index
       LDA   (Bpntrl),Y        ; get the next BASIC byte
       CMP   #TK_ELSE          ; compare it with the token for ELSE
@@ -9275,6 +9292,57 @@ P2BS_DONE
 ; Error Handling & Globals
 ; *************************************
 
+; TRY <statement> [then <statement> [else <statement>]]
+LAB_TRY
+      STZ   ERRNO_BASIC       ; clear existing error status
+      LDA   TRY_STATUS        ; save existing TRY for nexting
+      PHA
+      LDA   TRY_SP
+      PHA
+      LDA   Bpntrh            ; save current code pointer Bpntrl/h
+      PHA
+      LDA   Bpntrl
+      PHA
+      SEC
+      ROR   TRY_STATUS        ; indicate TRY active
+      TSX
+      STX   TRY_SP            ; and make sure we can unroll stack
+      JSR   LAB_GBYT          ; get current byte from run stream
+      JSR   LAB_15FF          ; execute code, if error we don't get back
+      PLA                     ; discard saved Bpntrl/h because no error
+      PLA
+LAB_TRYCONT
+      PLA                     ; restore old TRY state for nesting purposes
+      STA   TRY_SP
+      PLA
+      STA   TRY_STATUS
+      STZ   FAC1_e            ; Anticipate error
+      LDA   ERRNO_BASIC       ; get saved error code
+      BNE   :+
+      INC   FAC1_e            ; return true if no error
+:     JMP   LAB_TRYTHEN       ; go do THEN
+; error routine jumps here if try active
+LAB_CATCH
+      LDX   TRY_SP
+      TXS                     ; unroll stack
+      PLA                     ; get saved Bpntrl/h back
+      STA   Bpntrl
+      PLA
+      STA   Bpntrh
+      ; now look for THEN or end of statement
+      JSR   LAB_GBYT
+:     BEQ   LAB_CATCH_EOS
+      CMP   #TK_THEN
+      BEQ   LAB_TRYCONT
+      JSR   LAB_IGBY
+      BRA   :-
+LAB_CATCH_EOS                 ; did not find a THEN after TRY
+      PLA                     ; restore old TRY state for nesting purposes
+      STA   TRY_SP
+      PLA
+      STA   TRY_STATUS
+      RTS                     ; done with TRY
+
 LAB_ERRNO
       JSR   LAB_F2FX          ; convert FAC1 to integer in Itempl/h
       LDA   Itempl
@@ -9287,8 +9355,8 @@ LAB_ERRNO
       LDY   ERRNO_BASIC,X     ; get error code
       JMP   LAB_1FD0          ; convert Y to byte in FAC1 and return
 LAB_ERRNO_LINE
-      LDY   Blinel            ; FIXME: temporary, error routine needs to save Clinel/h
-      LDA   Blineh
+      LDY   ERRNO_LINE
+      LDA   ERRNO_LINE+1
       JMP   LAB_AYFC          ; save and convert integer AY to FAC1 and return
 
 ; Get address of global page+offset
@@ -10994,6 +11062,7 @@ LAB_LTBL
       .word LAB_RENAME        ; RENAME
       .word LAB_P8CALL        ; P8CALL
       .word LAB_MTEXT         ; MTEXT
+      .word LAB_TRY           ; TRY
 ;      .word LAB_CHTYPE        ; CHTYPE
 ;      .word LAB_LOCK          ; LOCK
 ;      .word LAB_UNLOCK        ; UNLOCK
@@ -11641,6 +11710,10 @@ LBB_THEN
       .byte "HEN",TK_THEN     ; THEN
 LBB_TO
       .byte "O",TK_TO         ; TO
+.ifdef APPLE2
+LBB_TRY
+      .byte "RY",TK_TRY       ; TRY
+.endif
 LBB_TWOPI
       .byte "WOPI",TK_TWOPI   ; TWOPI
       .byte $00
@@ -11726,6 +11799,8 @@ LAB_KEYL
       .word LBB_P8CALL        ; P8CALL
       .byte 5,'M'
       .word LBB_MTEXT         ; MTEXT
+      .byte 3,'T'
+      .word LBB_TRY           ; TRY
 .endif
 .endif
 
