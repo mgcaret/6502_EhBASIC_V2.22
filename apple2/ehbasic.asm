@@ -371,12 +371,12 @@ TK_RENAME         = TK_ONLINE+1     ; RENAME
 TK_P8CALL         = TK_RENAME+1     ; P8CALL
 TK_MTEXT          = TK_P8CALL+1     ; MTEXT
 TK_TRY            = TK_MTEXT+1      ; TRY
-TK_POP            = TK_TRY+1        ; POP
+TK_ERROR          = TK_TRY+1        ; ERROR
+TK_POP            = TK_ERROR+1      ; POP
 TK_CHTYPE         = TK_POP+1        ; CHTYPE
 TK_LOCK           = TK_CHTYPE+1     ; LOCK
 TK_UNLOCK         = TK_LOCK+1       ; UNLOCK
-TK_ERROR          = TK_UNLOCK+1     ; ERROR
-TK_SYS            = TK_ERROR+1      ; SYS (call with register load/save)
+TK_SYS            = TK_UNLOCK+1     ; SYS (call with register load/save)
 .endif
 
 .out .sprintf("Low tokens enabled, highest #: %x",TK_SYS)
@@ -1460,7 +1460,8 @@ LAB_XERR
       STA   ERRNO_LINE+1
       TXA
       LSR
-      STA   ERRNO_BASIC       ; save error number / 2
+      INC   A
+      STA   ERRNO_BASIC       ; save error number / 2 + 1
       BIT   TRY_STATUS
       BPL   :+                ; branch if no TRY active
       JMP   LAB_CATCH         ; otherwise catch error
@@ -1468,15 +1469,28 @@ LAB_XERR
 .endif
       JSR   LAB_CRLF          ; print CR/LF
 
+.ifdef APPLE2
+      CPX   #LAST_ERR
+      BCC   :+
+      LDX   ERRNO_BASIC
+      LDA   #$00
+      JSR   LAB_295E          ; print integer error number
+      BRA   :++
+:     LDA   LAB_BAER,X        ; get error message pointer low byte
+      LDY   LAB_BAER+1,X      ; get error message pointer high byte
+      JSR   LAB_18C3          ; print null terminated string from memory
+:
+.else
       LDA   LAB_BAER,X        ; get error message pointer low byte
       LDY   LAB_BAER+1,X      ; get error message pointer high byte
       JSR   LAB_18C3          ; print null terminated string from memory
+.endif
 
       JSR   LAB_1491          ; flush stack and clear continue flag
 .ifdef APPLE2
       JSR   P8_CloseAll
       LDA   ERRNO_BASIC       ; get error back
-      CMP   #$30              ; is P8 error?
+      CMP   #$30/2+1          ; is P8 error?
       BNE   NOTP8ERR
       LDA   ERRNO_PRODOS
       JSR   LAB_GP8E          ; get error string
@@ -9292,6 +9306,16 @@ P2BS_DONE
 ; Error Handling & Globals
 ; *************************************
 
+LAB_ERROR
+      JSR   LAB_GTBY          ; get byte parameter in x
+      TXA
+      BNE   :+
+      RTS                     ; do nothing if 0
+:     DEC   A
+      ASL
+      TAX
+      JMP   LAB_XERR
+
 ; TRY <statement> [then <statement> [else <statement>]]
 LAB_TRY
       STZ   ERRNO_BASIC       ; clear existing error status
@@ -11063,6 +11087,7 @@ LAB_LTBL
       .word LAB_P8CALL        ; P8CALL
       .word LAB_MTEXT         ; MTEXT
       .word LAB_TRY           ; TRY
+      .word LAB_ERROR         ; ERROR
 ;      .word LAB_CHTYPE        ; CHTYPE
 ;      .word LAB_LOCK          ; LOCK
 ;      .word LAB_UNLOCK        ; UNLOCK
@@ -11464,6 +11489,8 @@ LBB_EOR
 .ifdef APPLE2
 LBB_ERRNO
       .byte "RRNO(",TK_ERRNO  ; ERRNO(
+LBB_ERROR
+      .byte "RROR",TK_ERROR   ; ERROR
 .endif
 LBB_EXP
       .byte "XP(",TK_EXP      ; EXP(
@@ -11801,6 +11828,8 @@ LAB_KEYL
       .word LBB_MTEXT         ; MTEXT
       .byte 3,'T'
       .word LBB_TRY           ; TRY
+      .byte 5,'E'
+      .word LBB_ERROR         ; ERROR
 .endif
 .endif
 
@@ -12108,6 +12137,7 @@ LAB_BAER
       .word ERR_ND            ;$2E no device connected
       .word ERR_P8            ;$30 prodos
       .word ERR_FT            ;$32 file type mismatch
+LAST_ERR = * - LAB_BAER
       
 LAB_P8ER                      ; ProDOS error table
       .byte $27               ; I/O error
@@ -12167,7 +12197,7 @@ ERR_OV      .byte "Overflow",$00
 ERR_OM      .byte "Out of memory",$00
 ERR_US      .byte "Undef'd statement",$00
 ERR_BS      .byte "Array bounds",$00
-ERR_DD      .byte "Double dimension",$00
+ERR_DD      .byte "Re-DIM",$00
 ERR_D0      .byte "Divide by zero",$00
 ERR_ID      .byte "Illegal direct",$00
 ERR_FT      .byte "File " ; roll into next message
@@ -12175,11 +12205,11 @@ ERR_TM      .byte "Type mismatch",$00
 ERR_LS      .byte "String too long",$00
 ERR_ST      .byte "String too complex",$00
 ERR_CN      .byte "Can't continue",$00
-ERR_UF      .byte "Undefined function",$00
+ERR_UF      .byte "Undef'd function",$00
 ERR_LD      .byte "LOOP without DO",$00
 ERR_XC      .byte "Unimpl'd feature",$00
 ERR_IA      .byte "Illegal argument",$00
-ERR_IO      .byte "I/O error",$00
+ERR_IO      .byte "I/O",$00
 ERR_ND      .byte "No device connected",$00
 ERR_P8      .byte "ProDOS ",$00
 .else
