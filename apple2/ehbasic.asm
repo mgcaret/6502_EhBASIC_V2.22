@@ -591,13 +591,14 @@ AUTO_RUN          .byte $00   ; auto-run flag, set by run "file"
 NEXT_LINE         .word 10    ; last non-empty line number entered, default to 10
 SYS_VEC           .word $0000 ; address of SYS called routine
 WS_VEC            jmp LDR_CALLBACK ; called every warm start
+ERR_VEC           jmp LAB_ARTS  ; called on error before most things
 ; Error codes & handling
 ERRNO_LINE        .word $0000 ; line of last BASIC error
 ERRNO_BASIC       .byte $00   ; last BASIC error code
 ERRNO_PASCAL_IO   .byte $00   ; last PASCAL I/O error code
 ERRNO_PRODOS      .byte $00   ; last PRODOS error code
 TRY_STATUS        .byte $00   ; status of TRY, high bit set = active
-TRY_SP            .byte $00   ; stack pointer of active TRY
+TRY_SP            .byte $00   ; stack pointer of active TRY (or try-like thing)
 ; Active Pascal I/O vectors
 IO_PINIT          .addr A2_STDIO_PINIT    ; only used when initing
 IO_IN_PREAD       .addr A2_STDIO_PREAD
@@ -690,6 +691,7 @@ FILES             .byte 0,0,0,0
                   .byte 0,0,0,0
                   .byte 0,0,0,0
                   .byte 0,0,0,0
+
 ;
 START_DEV         .byte 0       ; start device
 START_FILE        .byte 0       ; nonzero if startup file present
@@ -750,7 +752,7 @@ LDR_QUIT:
       JSR   P8_MLI
       .byte $65               ; QUIT code
       .addr :+
-      BRK
+      BRK                     ; should *never* happen.
 :     .byte 4
       .byte 0
       .addr 0
@@ -1070,7 +1072,7 @@ LDR_MEMTAB  ; 24 bytes
 .popseg
 
 .segment "interp"
-      .org  $8500            ; change and uncomment for easier debugging
+      .org  $8400            ; change and uncomment for easier debugging
 .else
       *=    $C000
 .endif
@@ -1437,6 +1439,7 @@ LAB_PP8E                      ; Print ProDOS 8 Error
 :     LDX   ERRNO_PRODOS
       LDA   #$00
       JSR   LAB_295E          ; print P8 error #
+LAB_ARTS                      ; a known RTS
       RTS    
 
 LAB_XCER
@@ -1462,6 +1465,7 @@ LAB_XERR
       LSR
       INC   A
       STA   ERRNO_BASIC       ; save error number / 2 + 1
+      JSR   ERR_VEC           ; tell potential interceptor (for clean up, etc.)
       BIT   TRY_STATUS
       BPL   :+                ; branch if no TRY active
       JMP   LAB_CATCH         ; otherwise catch error
@@ -9318,6 +9322,8 @@ LAB_ERROR
 
 ; TRY <statement> [then <statement> [else <statement>]]
 LAB_TRY
+      LDA   #$04              ; require 4 bytes on stack
+      JSR   LAB_1212          ; check room on stack
       STZ   ERRNO_BASIC       ; clear existing error status
       LDA   TRY_STATUS        ; save existing TRY for nexting
       PHA
@@ -9332,11 +9338,13 @@ LAB_TRY
       TSX
       STX   TRY_SP            ; and make sure we can unroll stack
       JSR   LAB_GBYT          ; get current byte from run stream
-      JSR   LAB_15FF          ; execute code, if error we don't get back
-      PLA                     ; discard saved Bpntrl/h because no error
+      JSR   LAB_15FF          ; execute code, if error we don't come back
+LAB_TRYCONT                   ; directly
+      PLA                     ; get saved Bpntrl/h back
+      STA   Bpntrl
       PLA
-LAB_TRYCONT
-      PLA                     ; restore old TRY state for nesting purposes
+      STA   Bpntrh
+      PLA                     ; restore previous TRY state
       STA   TRY_SP
       PLA
       STA   TRY_STATUS
@@ -9344,28 +9352,28 @@ LAB_TRYCONT
       LDA   ERRNO_BASIC       ; get saved error code
       BNE   :+
       INC   FAC1_e            ; return true if no error
-:     JMP   LAB_TRYTHEN       ; go do THEN
+:     JSR   LAB_GBYT          ; get current byte in run stream
+      BEQ   LAB_TRY_EOS       ; either ELSE or end of statement
+:     CMP   #TK_THEN          ; is THEN?
+      BNE   :+
+      JMP   LAB_TRYTHEN       ; go do THEN
+:     JSR   LAB_IGBY          ; otherwise fetch next byte in run stream
+      BNE   :--               ; and keep processing
+LAB_TRY_EOS
+      CMP   #TK_ELSE          ; is ELSE?
+      BEQ   :+                ; yep, go deal with it
+      RTS                     ; nope, end of statement reached
+:     LDA   ERRNO_BASIC       ; check error
+      BNE   :+
+      JMP   LAB_DATA          ; ignore ELSE clause if no error
+:     JSR   LAB_IGBY          ; otherwise skip ELSE token
+      JMP   LAB_1754          ; and execute clause
+
 ; error routine jumps here if try active
 LAB_CATCH
       LDX   TRY_SP
       TXS                     ; unroll stack
-      PLA                     ; get saved Bpntrl/h back
-      STA   Bpntrl
-      PLA
-      STA   Bpntrh
-      ; now look for THEN or end of statement
-      JSR   LAB_GBYT
-:     BEQ   LAB_CATCH_EOS
-      CMP   #TK_THEN
-      BEQ   LAB_TRYCONT
-      JSR   LAB_IGBY
-      BRA   :-
-LAB_CATCH_EOS                 ; did not find a THEN after TRY
-      PLA                     ; restore old TRY state for nesting purposes
-      STA   TRY_SP
-      PLA
-      STA   TRY_STATUS
-      RTS                     ; done with TRY
+      BRA   LAB_TRYCONT       ; and continue TRY statement
 
 LAB_ERRNO
       JSR   LAB_F2FX          ; convert FAC1 to integer in Itempl/h
@@ -9395,8 +9403,88 @@ LAB_GLOBAL
       JMP   LAB_AYFC          ; save and convert integer AY to FAC1 and return
 
 ; *************************************
-; ProDOS Commands (except load/save)
+; ProDOS/File Commands (except load/save)
 ; *************************************
+
+; find a file reference number (or 0 for first unallocated)
+; returns carry set &  offset in FILES in x if found
+; otherwise carry clear and X destroyed if not found
+LAB_NEW_FREF
+      LDA   #$00
+LAB_GET_FREF
+      LDX   #7*4              ; max files = 8
+:     CMP   FILES,x
+      BEQ   :+                ; carry is set by CMP
+      DEX
+      DEX
+      DEX
+      DEX
+      BPL   :-
+      CLC
+:     RTS
+
+LAB_FREF_ARGN
+      CMP   #'#'
+      BEQ   LAB_FREF_ARG
+      JMP   LAB_SNER
+; process an FREF arg
+LAB_FREF_ARG
+      JSR   LAB_IGBY          ; skip #
+      JSR   LAB_GTBY          ; get byte parm in x
+      CPX   $80
+      BCC   :+
+      JMP   LAB_IAER          ; if > 127
+:     PHX                     ; save file number
+      TXA
+      JSR   LAB_GET_FREF      ; see if in use
+      PLA                     ; and get it back into A
+      RTS
+
+; implement OPEN #fnum,file/slot[,<type>] [FOR READ|WRITE|APPEND]
+LAB_OPEN
+      JSR   LAB_FREF_ARGN     ; get file arg and see if in use
+      BCC   :+                ; nope, don't error
+      LDA   #12               ; Re-DIM error
+      JMP   LAB_XERR
+:     PHA
+      JSR   LAB_NEW_FREF      ; ge a new file ref
+      PLA
+      BCS   :+                ; got one, don't error
+LAB_OMERF
+      JMP   LAB_OMER          ; otherwise OOM
+:     PHA
+      PHX
+      JSR   LAB_GETBUF        ; allocate a buffer
+      PLX
+      PLA
+      BCC   LAB_OMERF         ; error out if no buffer allocated
+      STA   FILES,x           ; mark file slot in use
+      TYA
+      STA   FILES+2,x         ; save buffer number
+      PHX                     ; save file num
+      JSR   LAB_1C01          ; scan for comma
+      JSR   GetPath           ; get path
+      JSR   CopyPath          ; and copy to PathBuf
+      JSR   P8_Get_File_Info  ; get file info
+      PLX                     ; anticipate OK
+      BCC   :+                ; if no error
+      PHA
+      LDA   #$80
+      STA   FILES,x           ; free slot
+      LDA   FILES+2,x         ; get buffer
+      JSR   LAB_FREEBUF       ; free it
+P8_DoError4
+      JMP   P8_DoError        ; and error out
+:     ;JSR   
+      STx   PARM_Open+3       ; data buffer l
+      STx   PARM_Open+4       ; data buffer h
+      JSR   P8_Open           ; open file
+      
+      
+      
+      
+LAB_OPEN_SLOT
+      JMP   LAB_XCER          ; not currently supported
 
 LAB_P8CALL
       JSR   LAB_GTBY          ; get byte in X
@@ -9616,14 +9704,14 @@ CAT_HEADER
       BEQ   CAT_DIR_HEADER    ; found directory header
       RTS                     ; something wrong, though, don't do block
 CAT_DIR_HEADER
-      LDY   #$21              ; case bits hi byte in dir header
+      LDY   #$21              ; case bits hi byte in dir header, from 0
       JSR   CAT_CASEBITS
       LDA   #<LAB_FOLDER
       LDY   #>LAB_FOLDER
       JSR   LAB_18C3          ; print folder symbol
       BRA   :+      
 CAT_VOL_HEADER
-      LDY   #$1B              ; case bits hi byte in vol header
+      LDY   #$1B              ; case bits hi byte in vol header, from 0
       JSR   CAT_CASEBITS
       LDA   #<LAB_VOLUME
       LDY   #>LAB_VOLUME
@@ -9774,7 +9862,7 @@ CAT_DISP_BLOCKS
       JSR   LAB_PRNA
       RTS
 
-; Get case bits at (OSptr),Y
+; Get case bits at (OSptr),Y-1
 CAT_CASEBITS
       STZ   Itempl
       STZ   Itemph
@@ -9854,6 +9942,7 @@ LAB_GETBUF_GOT
       sta   BUFFS,x
       pla                     ; discard saved x
       pla                     ; discard saved y
+LAB_GETBUF_BUFADDR
       lda   BUFFS+1,x
       ldx   Ememl             ; AX = buffer address, y = buffer number
       sec
@@ -9865,6 +9954,17 @@ LAB_GETBUF_FAIL
       ply
       rts
 
+; enter with Y = buffer number
+; return with carry set and AX = buffer number
+; or carry clear if problem
+LAB_BUFADR
+      tya
+      asl
+      tax
+      lda   BUFFS,x
+      bpl   LAB_GETBUF_BUFADDR
+      clc
+      rts
       
 ; input y=buffer number
 ; return carry clear if no buffer freed
@@ -10580,68 +10680,35 @@ V_LOAD_S1:                    ; called by loader if startup file present
       bne   LDSV_S1           ; load it
       brk                     ; crash if something stinks, to avoid doing SAVE
 V_SAVE
+      cmp   #TK_LIST
+      beq   SAVE_LIST         
       lda   #$00
 LDSV
       pha
       jsr   GetPath
 LDSV_S1                       ; called from loader code if startup file present
       jsr   CopyPath
-      jsr   P8_Get_File_Info
-      bcc   LDSV_FIEX         ; file exists... go to next step
-      pla                     ; get operation
-      beq   :+                ; save, don't check for FNF
-      lda   #$46              ; restore file not found error code
-      jmp   P8_DoError        ; was load, FNF is fatal
-:     pha                     ; for save, we have to create the file
-      lda   #$f8              ; file type
-      sta   PARM_Create+4
-      lda   #$a0              ; aux type low
-      sta   PARM_Create+5
-      lda   #$eb              ; aux type high
-      sta   PARM_Create+6
-      lda   #$01              ; storage type ($1 = regular file)
-      sta   PARM_Create+7
-      jsr   P8_Get_Time       ; get time
-      ldx   #$03              ; copy date/time
-:     lda   $bf90,x
-      sta   PARM_Create+8,x
-      dex
-      bpl   :-
-      jsr   P8_Create
-      bcc   LDSV_OPEN         ; always (read code and convince yourself!)
-LDSV_FIEX
-      ; TODO: load opens any file, checks header
-      ;pla                     ; get op
-      ;pha
-      ;bne   LDSV_OPEN         ; if loading, we open all and look for magic
-      lda   PARM_File_Info+$4 ; get file type
-      cmp   #$f8              ; is ours?
-      beq   :+
-LDSV_FTMM
-      ldx   #$32              ; type mismatch
-      jmp   LAB_XERR
-:     lda   PARM_File_Info+$5
-      cmp   #$a0              ; program data
-      bne   LDSV_FTMM
-      lda   PARM_File_Info+$6
-      cmp   #$eb              ; EhBasic file
-      bne   LDSV_FTMM
-LDSV_OPEN
+      ; TODO: open any and check for header
+      lda   #$f8
+      sta   PARM_Create+$4    ; type
+      lda   #$a0
+      sta   PARM_Create+$5    ; aux type low
+      lda   #$eb
+      sta   PARM_Create+$6    ; aux type high
       lda   RES_BUF
       sta   PARM_Open+3
       lda   RES_BUF+1
       sta   PARM_Open+4
-      jsr   P8_Open
-      bcs   P8_DoError        ; FNF is fatal here
-      lda   PARM_Open+5       ; reference number
-      sta   PARM_ReadWrite+1
-      sta   PARM_Close+1
+      pla                     ; get operation, $00=save, which allows CREATE
+      pha                     ; need it later
+      jsr   LAB_OPENFILE      ; try opening the file
+      ; TODO: validate header
       lda   Smeml             ; start read/write at start of memory
       sta   PARM_ReadWrite+2
       lda   Smemh
       sta   PARM_ReadWrite+3
-      pla                     ; last time we look at op
-      beq   LDSV_WRITE
+      pla                     ; look at load/save op one more time
+      beq   LDSV_WRITE        ; $00 = save
       ; jsr   LAB_1463          ; execute "NEW"
       lda   Ememl             ; begin reading
       sec
@@ -10669,6 +10736,64 @@ LDSV_WRITE
       jsr   P8_Write
 LDSV_CLOSE
       jsr   P8_Close
+      rts
+SAVE_LIST
+      jmp   LAB_XCER          ; for now
+
+; open file
+; on input:
+;   path in path buffer
+;   a = 0 if create allowed
+;   PARM_Create type and aux type are set to desired values
+;     Used for creating and for validating existing fules
+;     If zero, not validated
+;   PARM_Open buffer pointer is set for when open is called
+; on return:
+;   A=file ref number of open file
+;   read/write and open/close parameter lists set for this file
+; on error:
+;   basic error handler is executed
+LAB_OPENFILE
+      pha                     ; save if we are allowed to create
+      jsr   P8_Get_File_Info  ; and let P8 do its job
+      pla                     ; get create allowed back (z flag ajusted)
+      bcc   LAB_OPENEX        ; open existing file (no error getting info)
+      beq   :+                ; go do create if a=$00
+      lda   #$46              ; otherwise file not found was the error
+      bra   P8_DoError
+:     lda   #$01              ; storage type $1 = regular file
+      sta   PARM_Create+$7
+      jsr   P8_Get_Time       ; get time
+      ldx   #$03              ; copy date/time
+:     lda   $bf90,x
+      sta   PARM_Create+$8,x
+      dex
+      bpl   :-
+      jsr   P8_Create
+      bcc   LAB_DOOPEN        ; always (read code and convince yourself!)
+LAB_OPENEX
+      lda   PARM_Create+$4    ; file type desired
+      beq   LAB_DOOPEN        ; if zero, just go open file
+      cmp   PARM_File_Info+$4 ; file type found
+      beq   :+                ; OK, maybe check aux type
+LAB_FTMM
+      ldx   #$32              ; file type mismatch
+      jmp   LAB_XERR
+:     lda   PARM_Create+$5    ; aux type low
+      ora   PARM_Create+$6    ; aux type high
+      beq   LAB_DOOPEN        ; don't check aux type if no bits are set
+      lda   PARM_Create+$5
+      cmp   PARM_File_Info+$5
+      bne   LAB_FTMM          ; if aux type low doesn't match
+      lda   PARM_Create+$6
+      cmp   PARM_File_Info+$6
+      bne   LAB_FTMM          ; if aux type high doesn't match
+LAB_DOOPEN                    ; buffer address already in PARM_Open
+      jsr   P8_Open           ; finally we get to open the file
+      bcs   P8_DoError        ; FNF fatal at this point
+      lda   PARM_Open+5       ; ref num
+      sta   PARM_ReadWrite+1  ; preemptively ready read/write 
+      sta   PARM_Close+1      ; and close, for this file
       rts
 
 P8_CheckErrs
@@ -10704,6 +10829,7 @@ P8_Create
       bra   P8_CheckErrs
       
 P8_Open
+      stz   PARM_Open+5       ; zero file ref
       jsr   P8_MLI
       .byte $C8
       .addr PARM_Open
@@ -10761,7 +10887,7 @@ P8_Rename
       .byte $C2
       .addr PARM_Rename
 P8_CheckErrs2
-      bra   P8_CheckErrs
+      jmp   P8_CheckErrs
       
 P8_Destroy
       jsr   P8_MLI
@@ -12089,14 +12215,16 @@ LAB_KEYT
       .word LBB_PDL           ; PDL
       .byte 4,'B'
       .word LBB_BTN           ; BTN
-      .byte 4,'T'
+      .byte 5,'T'
       .word LBB_TELL          ; TELL
+      .byte 5,'S'
+      .word LBB_SCRN          ; SCRN
       .byte 6,'E'
       .word LBB_ERRNO         ; ERRNO
       .byte 5,'P'
       .word LBB_P2BS          ; P2B$(
       .byte 5,'B'
-      .word LBB_B2PS          ; P2B$(
+      .word LBB_B2PS          ; B2B$(
       .byte 6,'H'
       .word LBB_HSCRN         ; HSCRN
 .endif

@@ -1,6 +1,6 @@
 MEMORY {
 	LOAD1: start = $2000, size = $3F00;
-	RUN1: start = $8500, size = $3900;
+	RUN1: start = $8400, size = $3A00;
 	GLOBAL1: start = $BE00, size = $100;
 }
 
