@@ -608,8 +608,8 @@ IO_OUT_PSTATUS    .addr A2_STDIO_PSTATUS
 IO_A2_INPT        jmp   V_INPT_MON        ; we set firmware KSW vector to this
 IO_A2_OUTP        jmp   V_OUTP_MON        ; we set firmware CSW vector to this
 ; Active default I/O info
-IO_SLOT_IN        .byte $0    ; slot * $10
-IO_SLOT_OUT       .byte $0    ; slot * $10
+IO_SLOT_IN        .byte $0    ; slot * $10, high bit set=file
+IO_SLOT_OUT       .byte $0    ; slot * $10, high bit set=file
 IO_TEXT_SLOT      .byte $0    ; last text slot number
 ; table of pascal slot types
 SLOT_TYPES
@@ -2853,20 +2853,54 @@ LAB_16F7                      ; do undefined statement error
       LDX   #$0E              ; error code $0E ("Undefined statement" error)
       JMP   LAB_XERR          ; do error #X, then warm start
 
+.ifdef APPLE2
+LAB_POP
+      BNE   LAB_16E5
+      SEC                     ; flag POP
+      BCS   LAB_16E8
+DO_POP
+      PLA                     ; drop remaining crap (current line high)
+      PLA                     ; (exec ptr low)
+      PLA                     ; (exec ptr high)
+      LDA   Itemph            ; restore caller adddress
+      PHA
+      LDA   Itempl
+      PHA
+      RTS                     ; and carry on
+.endif
+
 ; perform RETURN
 
 LAB_RETURN
       BNE   LAB_16E5          ; exit if following token (to allow syntax error)
+.ifdef APPLE2
+      CLC                     ; flag RETURN
+.endif
 
 LAB_16E8
       PLA                     ; dump calling routine return address
+.ifdef APPLE2
+      STA   Itempl            ; but save in case POP
+.endif
       PLA                     ; dump calling routine return address
+.ifdef APPLE2
+      STA   Itemph            ; but save in case POP
+.endif
       PLA                     ; pull token
+.ifdef APPLE2
+      PHP                     ; save status
+.endif
       CMP   #TK_GOSUB         ; compare with GOSUB token
       BNE   LAB_16F4          ; branch if no matching GOSUB
+.ifdef APPLE2
+      PLP                     ; restore status (C flag important)
+.endif
 
 LAB_16FF
       PLA                     ; pull current line low byte
+.ifdef APPLE2
+      BCS   DO_POP
+.endif
       STA   Clinel            ; save current line low byte
       PLA                     ; pull current line high byte
       STA   Clineh            ; save current line high byte
@@ -2980,12 +3014,18 @@ LAB_174G
       LDY   #$00              ; clear the index
       LDA   (Bpntrl),Y        ; get the next BASIC byte
       CMP   #TK_ELSE          ; compare it with the token for ELSE
+.ifdef APPLE2
+      BNE   :+
+      JMP   LAB_DATA
+:     RTS
+.else
       BEQ   LAB_DATA          ; if ELSE ignore the following statement
 
 ; there was no ELSE so continue execution of IF <expr> THEN <stat> [: <stat>]. any
 ; following ELSE will, correctly, cause a syntax error
 
       RTS                     ; else return to the interpreter inner loop
+.endif
 
 ; perform ELSE after IF
 
@@ -3298,6 +3338,13 @@ LAB_PRINT
       BEQ   LAB_CRLF          ; if nothing following just print CR/LF
 
 LAB_1831
+.ifdef APPLE2
+      CMP   #TK_THEN          ; might be part of TRY
+      BNE   :+
+      JMP   LAB_DATA          ; ignore the rest of the line
+:
+.endif
+      
       CMP   #TK_TAB           ; compare with TAB( token
       BEQ   LAB_18A2          ; go do TAB/SPC
 
@@ -3403,7 +3450,13 @@ LAB_18BA
                               ; continue with PRINT processing
 LAB_18BD
       JSR   LAB_IGBY          ; increment and scan memory
+.ifdef APPLE2
+      BEQ   :+
+      JMP   LAB_1831
+:
+.else
       BNE   LAB_1831          ; if more to print go do it
+.endif
 
       RTS
 
@@ -9322,7 +9375,10 @@ LAB_ERROR
 
 ; TRY <statement> [then <statement> [else <statement>]]
 LAB_TRY
-      LDA   #$04              ; require 4 bytes on stack
+      CMP   #TK_IF            ; not allowed
+      BNE   :+
+      JMP   LAB_SNER
+:     LDA   #$04              ; require 4 bytes on stack
       JSR   LAB_1212          ; check room on stack
       STZ   ERRNO_BASIC       ; clear existing error status
       LDA   TRY_STATUS        ; save existing TRY for nexting
@@ -10397,13 +10453,13 @@ DO_VEC_OUT_STATUS
 DO_VEC_OUT
       cmp   #$0d              ; is CR
       bne   :+
-      lda   ZP_PROMPT
-      cmp   #'E'
-      php
-      lda   #$0d
-      plp
+      lda   ZP_PROMPT         ; check prompt character
+      cmp   #'E'              ; see if it's ours (we don't use it)
+      php                     ; and save that result
+      lda   #$0d              ; fix to intended
+      plp                     ; and get prompt results back
       beq   :+                ; no translation if prompt is ours
-      jsr   :+                ; otherwise output a ctrl-d
+      jsr   :+                ; otherwise output the CR
       lda   #$0a              ; then a linefeeed
 :     ldx   IO_OUT_PWRITE+1   ; $Cn
       ldy   IO_SLOT_OUT       ; $n0
@@ -11208,10 +11264,10 @@ LAB_LTBL
       .word LAB_MTEXT         ; MTEXT
       .word LAB_TRY           ; TRY
       .word LAB_ERROR         ; ERROR
+      .word LAB_POP           ; POP
 ;      .word LAB_CHTYPE        ; CHTYPE
 ;      .word LAB_LOCK          ; LOCK
 ;      .word LAB_UNLOCK        ; UNLOCK
-;      .word LAB_ERROR         ; ERROR
 ;      .word LAB_SYS           ; SYS
 .endif
 .endif
@@ -11770,6 +11826,8 @@ LBB_POKE
 LBB_POS
       .byte "OS(",TK_POS      ; POS(
 .ifdef APPLE2
+LBB_POP
+      .byte "OP",TK_POP       ; POP (not in canonical order)
 LBB_PREFIX
       .byte "REFIX",TK_PREFIX ; PREFIX
 .endif
@@ -11950,6 +12008,8 @@ LAB_KEYL
       .word LBB_TRY           ; TRY
       .byte 5,'E'
       .word LBB_ERROR         ; ERROR
+      .byte 3,'P'
+      .word LBB_POP           ; POP
 .endif
 .endif
 
