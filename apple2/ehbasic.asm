@@ -931,15 +931,15 @@ LDR_SCANSLOTS
       ldy   #$05              ; offset 5
       lda   ($00),y           ; get signature byte
       cmp   #$38              ; firmware card sig #1
-      bne   :-
+      bne   trydisk
       ldy   #$07
       lda   ($00),y
       cmp   #$18              ; firmware card sig #2
-      bne   :-
+      bne   trydisk
       ldy   #$0B
       lda   ($00),y
       cmp   #$01              ; sig for pascal 1.1 cards
-      bne   :-
+      bne   trydisk
       ; all bytes matched now generate I/O pointers and such
       lda   $01
       and   #$0F
@@ -976,7 +976,39 @@ copyfwbyte2
       sta   GLOBAL_PAGE       ; self-modifying
 gpage = *-2
 scandone                      ; the RTS is dual-purpose!
-      rts 
+      rts
+trydisk:
+      ldy   #$01
+      lda   ($00),y
+      cmp   #$20
+      bne   :-
+      ldy   #$03
+      lda   ($00),y
+      bne   :-
+      ldy   #$05
+      lda   ($00),y
+      cmp   #$03
+      bne   :-
+      lda   $01
+      and   #$0F
+      tax
+      lda   #$07              ; pascal "mass-storage"
+      sta   SLOT_TYPES,x      ; into slot type
+      txa
+      asl
+      asl
+      asl
+      tax
+      ldy   #$04
+:     lda   #$00
+      sta   SLOT_TAB,x
+      inx
+      lda   $01
+      sta   SLOT_TAB,x
+      inx
+      dey
+      bne   :-
+      jmp   :--               ; back to loop
 
 ; BASIC calls us after we warm start
 ; this is so we can do some finalizations such as:
@@ -9612,17 +9644,17 @@ LAB_ONLINE
 LAB_ONLINE_LP
       LDY   #$00
       LDA   (OSptr),y
-      BEQ   LAB_ONLINE_DONE
-      JSR   LAB_PRUNIT
+      BEQ   LAB_ONLINE_DONE   ; 0 = end of online volumes
+      JSR   LAB_PRUNIT        ; print unit, in davex format for now
       JSR   LAB_PRSP
       LDA   (OSptr),y
       AND   #$0F
-      BNE   LAB_ONLINE_PRVOL
+      BNE   LAB_ONLINE_PRVOL  ; print volume name if no error
       INY
-      LDA   (OSptr),y
+      LDA   (OSptr),y         ; otherwise get error #
       STA   ERRNO_PRODOS
-      JSR   LAB_GP8E
-      JSR   LAB_PP8E
+      JSR   LAB_GP8E          ; get P8 Error string
+      JSR   LAB_PP8E          ; print it
       LDY   #$01
       LDA   (OSptr),y
       CMP   #$57              ; duplicate volume
