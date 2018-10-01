@@ -2527,13 +2527,13 @@ LAB_1602
 .endif
       ASL                     ; *2 bytes per vector and normalise token
       BCS   LAB_1609          ; branch if was token
-.ifdef NOAPPLE2
+.ifdef APPLE2
       CMP   #$4E              ; ASCII ' * 2
       BNE   :+
-      JMP   LAB_DATA          ; abbreviated REM
+      JMP   LAB_REM           ; abbreviated REM
 :     CMP   #$44              ; ASCII " * 2
       BNE   :+
-      JMP   LAB_PRINT         ; abbreviated PRINT
+      JMP   LAB_1831          ; abbreviated PRINT
 :
 .endif
       JMP   LAB_LET           ; else go do implied LET
@@ -8351,7 +8351,11 @@ CTRLC
 
 .ifdef APPLE2
       ; this defeats the one-byte buffer, but is more like AppleSoft
+      PHY
+      PHX
       JSR   DO_VEC_IN_STATUS  ; see if input device has char waiting
+      PLX
+      PLY
       BCC   LAB_FBA2          ; and exit if nothing there
 .endif
 
