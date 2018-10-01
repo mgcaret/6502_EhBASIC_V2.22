@@ -1090,8 +1090,8 @@ LDR_MEMTAB  ; 24 bytes
       .byte %00000000         ; 0D 6800-6FFF
       .byte %00000000         ; 0E 7000-77FF
       .byte %00000000         ; 0F 7800-7FFF
-      .byte %00000000         ; 10 8000-87FF
-      .byte %00000011         ; 11 8800-8FFF
+      .byte %00001111         ; 10 8000-87FF
+      .byte %11111111         ; 11 8800-8FFF
       .byte %11111111         ; 12 9000-97FF
       .byte %11111111         ; 13 9800-9FFF
       .byte %11111111         ; 14 A000-A7FF
@@ -2527,7 +2527,15 @@ LAB_1602
 .endif
       ASL                     ; *2 bytes per vector and normalise token
       BCS   LAB_1609          ; branch if was token
-
+.ifdef NOAPPLE2
+      CMP   #$4E              ; ASCII ' * 2
+      BNE   :+
+      JMP   LAB_DATA          ; abbreviated REM
+:     CMP   #$44              ; ASCII " * 2
+      BNE   :+
+      JMP   LAB_PRINT         ; abbreviated PRINT
+:
+.endif
       JMP   LAB_LET           ; else go do implied LET
 
 LAB_1609
@@ -8340,6 +8348,12 @@ LAB_PAUS
 CTRLC
       LDA   ccflag            ; get [CTRL-C] check flag
       BNE   LAB_FBA2          ; exit if inhibited
+
+.ifdef APPLE2
+      ; this defeats the one-byte buffer, but is more like AppleSoft
+      JSR   DO_VEC_IN_STATUS  ; see if input device has char waiting
+      BCC   LAB_FBA2          ; and exit if nothing there
+.endif
 
       JSR   V_INPT            ; scan input device
       BCC   LAB_FBA0          ; exit if buffer empty
